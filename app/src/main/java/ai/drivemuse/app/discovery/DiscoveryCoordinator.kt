@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
  * playback command (D02/T03).
  */
 
-data class RunSnapshot(val scope: String, val generation: Long, val profileVersion: Long, val configVersion: Long, val profile: SurveyProfile, val likedArtists: Set<String>, val constraints: Constraints)
+data class RunSnapshot(val scope: String, val generation: Long, val profileVersion: Long, val configVersion: Long, val profile: SurveyProfile, val likedArtists: Set<String>, val constraints: ai.drivemuse.domain.Constraints)
 data class RunReport(val runId: String, val status: String, val progress: RunProgress, val reasons: List<String>)
 
 class DiscoveryCoordinator(
@@ -140,7 +140,7 @@ class DiscoveryCoordinator(
             val now = clock()
             when (resolution.decision) {
                 IdentityDecision.AUTO_ACCEPT -> {
-                    val c = resolution.best!!.candidate
+                    val best = resolution.best!!; val c = best.candidate
                     val trackId = db.withTransaction {
                         if (catalog.control(s.scope)?.generation != s.generation) throw IllegalStateException("STALE_GENERATION")
                         val existing = catalog.tracksByIdentifier(IdentifierType.RECORDING_MBID.name, c.recordingId).firstOrNull()
@@ -149,7 +149,7 @@ class DiscoveryCoordinator(
                             catalog.insertTrack(TrackEntity(id, c.title, c.artist, JSONArray(listOf(c.artist)).toString(), c.durationMs, null, null, c.versionType.name, MetadataStatus.BASIC.name, 1, 1, null, false, now, now))
                             catalog.putIdentifiers(listOfNotNull(TrackIdentifierEntity(id, IdentifierType.RECORDING_MBID.name, c.recordingId, c.source, now), c.isrc?.let { TrackIdentifierEntity(id, IdentifierType.ISRC.name, it, c.source, now) }))
                         }
-                        catalog.updateRef(ref.copy(trackId = id, matchStatus = MatchStatus.CONFIRMED.name, matchEvidenceJson = Json.strings(resolution.best.evidence.map { "$it:${c.recordingId}" }), availability = Availability.AVAILABLE.name, kind = if (ref.kind == RefKind.UNKNOWN.name) guessKind(ref.title) else ref.kind))
+                        catalog.updateRef(ref.copy(trackId = id, matchStatus = MatchStatus.CONFIRMED.name, matchEvidenceJson = Json.strings(best.evidence.map { "$it:${c.recordingId}" }), availability = Availability.AVAILABLE.name, kind = if (ref.kind == RefKind.UNKNOWN.name) guessKind(ref.title) else ref.kind))
                         catalog.updateDiscoveryItem(item.copy(proposedTrackId = id, queueStatus = QueueStatus.ENRICHING.name))
                         id
                     }
