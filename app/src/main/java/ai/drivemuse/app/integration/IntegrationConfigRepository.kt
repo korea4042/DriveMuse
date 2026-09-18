@@ -125,10 +125,7 @@ object Probes {
             app == null -> ProbeResult(false, IntegrationError.PERMISSION, "Firebase 구성으로 초기화하지 못했습니다")
             v["modelId"].isNullOrBlank() -> ProbeResult(false, IntegrationError.API_NOT_ENABLED, "모델 ID가 필요합니다")
             else -> try {
-                kotlinx.coroutines.withTimeout(20_000) {
-                    com.google.firebase.Firebase.ai(app = app, backend = com.google.firebase.ai.type.GenerativeBackend.googleAI())
-                        .generativeModel(modelName = v.getValue("modelId")).generateContent("ping")
-                }
+                ai.drivemuse.app.gemini.FirebaseRuntime.ping(app, v.getValue("modelId"))
                 ProbeResult(true)
             } catch (e: Exception) {
                 val m = e.message ?: ""

@@ -1,8 +1,12 @@
 package ai.drivemuse.app.gemini
 
 import android.content.Context
+import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.GenerativeBackend
+import kotlinx.coroutines.withTimeout
 
 /**
  * Technical design v2.3 §5 and §22. The Firebase project is entered in the app, not fixed at build
@@ -31,5 +35,13 @@ object FirebaseRuntime {
         val options = FirebaseOptions.Builder()
             .setProjectId(projectId).setApplicationId(applicationId).setApiKey(apiKey).build()
         return runCatching { FirebaseApp.initializeApp(context, options, NAME) }.getOrNull()
+    }
+
+    /** One tiny call, so "연결됨" means the project really answered (§22). Throws on failure. */
+    suspend fun ping(app: FirebaseApp, modelId: String) {
+        withTimeout(20_000) {
+            Firebase.ai(app = app, backend = GenerativeBackend.googleAI())
+                .generativeModel(modelName = modelId).generateContent("ping")
+        }
     }
 }
