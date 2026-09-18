@@ -64,9 +64,10 @@ class MainActivity: ComponentActivity() {
     val diagnostic by ai.drivemuse.app.playback.MediaObservationService.diagnostic.collectAsStateWithLifecycle()
     val appContext=LocalContext.current
     val locationPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed -> if(allowed) vm.refreshWeather() else vm.message("위치 없이 기본 상황으로 추천합니다") }
-    val pendingRedirect by (redirect ?: MutableStateFlow(null)).collectAsStateWithLifecycle()
+    val redirectFlow = remember(redirect) { redirect ?: MutableStateFlow<android.net.Uri?>(null) }
+    val pendingRedirect by redirectFlow.collectAsStateWithLifecycle()
     LaunchedEffect(pendingRedirect) {
-        pendingRedirect?.takeIf { it.scheme == "drivemuse" }?.let { uri -> cvm.onSpotifyRedirect(uri); redirect?.value = null }
+        pendingRedirect?.takeIf { it.scheme == "drivemuse" }?.let { uri -> cvm.onSpotifyRedirect(uri); redirectFlow.value = null }
     }
     val rules by vm.rules.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()

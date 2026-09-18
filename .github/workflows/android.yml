@@ -1,5 +1,7 @@
 name: Android build and contracts
 on: [push, workflow_dispatch]
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -32,7 +34,25 @@ jobs:
               Path("app/google-services.json").write_text(config)
           PYTHON
       - run: python3 scripts/check_migration_sql.py
-      - run: chmod +x gradlew && ./gradlew :core:domain:test :app:testDebugUnitTest :app:assembleDebug
+      - name: Build and test
+        run: |
+          set -o pipefail
+          chmod +x gradlew && ./gradlew :core:domain:test :app:testDebugUnitTest :app:assembleDebug 2>&1 | tee /tmp/build.log
+      # Actions log downloads are not reachable from every environment, so a failure tail is
+      # committed to the ci-logs branch where the plain contents API can read it.
+      - name: Publish failure tail
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          { grep -E "^e: |error:|FAILURE|What went wrong|Caused by" -A 2 /tmp/build.log || tail -n 120 /tmp/build.log; } | tail -n 150 > /tmp/tail.txt
+          gh api --method POST repos/$GITHUB_REPOSITORY/git/refs -f ref=refs/heads/ci-logs -f sha=$GITHUB_SHA || true
+          SHA=$(gh api repos/$GITHUB_REPOSITORY/contents/ci-failure.log?ref=ci-logs --jq .sha 2>/dev/null || true)
+          if [ -n "$SHA" ]; then
+            gh api --method PUT repos/$GITHUB_REPOSITORY/contents/ci-failure.log -f message="ci failure $GITHUB_SHA" -f branch=ci-logs -f content="$(base64 -w0 /tmp/tail.txt)" -f sha="$SHA"
+          else
+            gh api --method PUT repos/$GITHUB_REPOSITORY/contents/ci-failure.log -f message="ci failure $GITHUB_SHA" -f branch=ci-logs -f content="$(base64 -w0 /tmp/tail.txt)"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
