@@ -178,3 +178,26 @@ class CatalogV23Test {
     @Test fun backoffHonorsRetryAfter() { assertEquals(7000, Backoff.delayMs(5, 7)); assertEquals(60_000, Backoff.delayMs(1)); assertEquals(30 * 60_000, Backoff.delayMs(10)) }
     @Test fun listenBrainzStatusContract() { assertEquals(RecommendationLookup.NONE_GENERATED, ListenBrainzContract.classify(204)); assertEquals(RecommendationLookup.NO_USER, ListenBrainzContract.classify(404)) }
 }
+
+class VideoFormTest {
+    @Test fun broadcastAndStageCutsAreNotPlaybackCandidates() {
+        assertTrue(VideoForm.isBroadcastOrStage("아티스트 - 곡 (교차편집/Stage Mix)"))
+        assertTrue(VideoForm.isBroadcastOrStage("[뮤직뱅크] 아티스트 - 곡", "KBS Kpop"))
+        assertTrue(VideoForm.isBroadcastOrStage("아티스트 곡 직캠 fancam"))
+        assertTrue(VideoForm.isBroadcastOrStage("곡 커버 cover by someone"))
+        assertTrue(VideoForm.isBroadcastOrStage("겨울 감성 노래 모음 1시간"))
+        assertTrue(VideoForm.isBroadcastOrStage("아티스트 - 곡 M/V Teaser"))
+    }
+    @Test fun studioUploadsSurvive() {
+        assertTrue(!VideoForm.isBroadcastOrStage("아티스트 - 곡 (Official Audio)"))
+        assertTrue(!VideoForm.isBroadcastOrStage("아티스트 - 곡", "아티스트 - Topic"))
+        assertTrue(!VideoForm.isBroadcastOrStage("Artist - Song (Official Music Video)"))
+    }
+    @Test fun topicChannelOutranksOfficialTitleAndMv() {
+        val topic = VideoForm.audioPreference("곡", "아티스트 - Topic")
+        val audio = VideoForm.audioPreference("곡 (Official Audio)", "아티스트")
+        val mv = VideoForm.audioPreference("곡 (Official M/V)", "아티스트")
+        val plain = VideoForm.audioPreference("곡", "아티스트")
+        assertTrue(topic > audio && audio > mv && mv > plain)
+    }
+}

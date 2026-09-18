@@ -27,7 +27,7 @@ class MusicRepository(
             if(!Quota.canSearch(used)) break
             if(!prefs.reserveSearch(today)) break
             val existing=dao.candidates(now-poolTtl).map { it.videoId }.toSet()
-            val results=api.searchMusic(phrase).filter { playable(it) && it.id !in existing }.map { row(it,false,.6,"survey_search",now) }
+            val results=preferAudio(api.searchMusic(phrase).filter { playable(it) && it.id !in existing }).map { row(it,false,.6,"survey_search",now) }
             dao.putCandidates(results)
         }
     }
@@ -91,7 +91,7 @@ class MusicRepository(
             val seed = likedArtists.random()
             runCatching {
                 check(prefs.reserveSearch(today)) { "Search quota reached" }
-                rows += api.searchMusic(seed).filter { playable(it) }.map { row(it, familiar = false, affinity = .55, source = "search", now = now) }
+                rows += preferAudio(api.searchMusic(seed).filter { playable(it) }).map { row(it, familiar = false, affinity = .55, source = "search", now = now) }
             }
         }
 
@@ -101,7 +101,11 @@ class MusicRepository(
         }
     }
 
-    private fun playable(v: RawVideo) = Policy.playableTrack(v.categoryId, v.live, v.durationSec) && Policy.validTrackId(v.id)
+    // §27: a stage cut or broadcast clip is a different rendition, not the requested recording.
+    private fun playable(v: RawVideo) = Policy.playableTrack(v.categoryId, v.live, v.durationSec) && Policy.validTrackId(v.id) &&
+        !VideoForm.isBroadcastOrStage(v.title, v.channel)
+    /** Among surviving refs, prefer the audio upload over an MV over anything unlabelled (§30). */
+    private fun preferAudio(rows: List<RawVideo>) = rows.sortedByDescending { VideoForm.audioPreference(it.title, it.channel) }
 
     private fun row(v: RawVideo, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(
         videoId = v.id,

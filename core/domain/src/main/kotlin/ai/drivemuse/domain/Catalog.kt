@@ -180,3 +180,38 @@ object AliasResolver {
         while (true) { val a = aliases.filter { it.oldTrackId == id && it.effectiveAt <= at }.maxByOrNull { it.effectiveAt } ?: return id; if (!seen.add(id)) return id; id = a.canonicalTrackId }
     }
 }
+
+/**
+ * v2.3 §27 and §30. A broadcast clip, a stage cut or a fancam is a different rendition from the
+ * recording the listener asked for: different length, crowd noise, MC talk, no usable coverage
+ * mapping. Until a Track is resolved to a verified audio ref, these forms stay out of playback
+ * candidates instead of being ranked slightly lower.
+ */
+object VideoForm {
+    private val broadcast = Regex(
+        "교차편집|스테이지믹스|stage ?mix|직캠|fancam|무대|음악중심|쇼!?\\s*음악중심|뮤직뱅크|music ?bank|인기가요|inkigayo|엠\\s*카운트다운|m\\s*countdown|엠카|쇼챔피언|show ?champion|더쇼|the ?show|본방|방송|풀\\s*영상|comeback ?show|리액션|reaction|cover(?![a-z])|커버|teaser|예고|behind|비하인드|메이킹|making ?film|practice|안무|choreography|dance ?practice|연습",
+        RegexOption.IGNORE_CASE)
+    private val longForm = Regex("playlist|플레이리스트|노래\\s*모음|모음집|1\\s*시간|\\b1 ?hour\\b|loop|압축", RegexOption.IGNORE_CASE)
+    private val liveHint = Regex("\\blive\\b|라이브|콘서트|concert|투어|tour", RegexOption.IGNORE_CASE)
+
+    /** True when the title or channel marks this as a broadcast, stage, or compilation rendition. */
+    fun isBroadcastOrStage(title: String, channel: String = ""): Boolean {
+        val text = "$title $channel"
+        if (broadcast.containsMatchIn(text) || longForm.containsMatchIn(text)) return true
+        // "Live" alone is ambiguous (a studio live session is still one recording), so it only
+        // counts together with a venue or broadcast word, which the regex above already covers.
+        return liveHint.containsMatchIn(title) && broadcast.containsMatchIn(text)
+    }
+
+    /**
+     * Preference among refs that survive the filter, highest first. An auto-generated "- Topic"
+     * channel is YouTube's own audio upload, so it outranks a title that merely says "official".
+     */
+    fun audioPreference(title: String, channel: String): Int = when {
+        channel.trimEnd().endsWith("- Topic") -> 4
+        Regex("official audio|\\baudio\\b|음원", RegexOption.IGNORE_CASE).containsMatchIn(title) -> 3
+        Regex("\\b(m/?v|music video)\\b", RegexOption.IGNORE_CASE).containsMatchIn(title) && TitleNormalizer.officialHint(title) -> 2
+        Regex("lyric|가사", RegexOption.IGNORE_CASE).containsMatchIn(title) -> 1
+        else -> 0
+    }
+}
