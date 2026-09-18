@@ -47,6 +47,7 @@ class SpotifyApi(private val auth: SpotifyAuth) {
     private suspend fun request(method: String, path: String, params: Map<String, String> = emptyMap(), body: JSONObject? = null, retry: Boolean = true): JSONObject? = withContext(Dispatchers.IO) {
         val token = auth.token()
         val query = if (params.isEmpty()) "" else "?" + params.entries.joinToString("&") { (k, v) -> k + "=" + URLEncoder.encode(v, "UTF-8") }
+        val where = path + query.take(160)
         val c = (URL(base + path + query).openConnection() as HttpsURLConnection).apply {
             requestMethod = method; connectTimeout = 6000; readTimeout = 10000; instanceFollowRedirects = false
             setRequestProperty("Authorization", "Bearer $token")
@@ -61,14 +62,15 @@ class SpotifyApi(private val auth: SpotifyAuth) {
                     val bytes = c.inputStream.use { it.readNBytes(2_000_001) }
                     if (bytes.isEmpty()) null else JSONObject(String(bytes, Charsets.UTF_8))
                 }
+                400 -> throw SpotifyUnavailable(reason(c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty(), 400, where))
                 401 -> throw SpotifyAuthRequired()
                 403 -> {
                     val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()
-                    if ("premium" in detail.lowercase()) throw SpotifyPremiumRequired() else throw SpotifyUnavailable(reason(detail, code, path))
+                    if ("premium" in detail.lowercase()) throw SpotifyPremiumRequired() else throw SpotifyUnavailable(reason(detail, code, where))
                 }
                 404 -> {
                     val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()
-                    if ("device" in detail.lowercase()) throw SpotifyNoActiveDevice() else throw SpotifyUnavailable(reason(detail, code, path))
+                    if ("device" in detail.lowercase()) throw SpotifyNoActiveDevice() else throw SpotifyUnavailable(reason(detail, code, where))
                 }
                 429 -> {
                     val wait = c.getHeaderField("Retry-After")?.toLongOrNull() ?: 2
@@ -76,13 +78,13 @@ class SpotifyApi(private val auth: SpotifyAuth) {
                     delay(wait.coerceAtMost(10) * 1000)
                     return@withContext request(method, path, params, body, retry = false)
                 }
-                else -> throw SpotifyUnavailable(reason(c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty(), code, path))
+                else -> throw SpotifyUnavailable(reason(c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty(), code, where))
             }
         } finally { c.disconnect() }
     }
 
-    private fun reason(detail: String, code: Int, path: String) =
-        path + ": " + runCatching { JSONObject(detail).optJSONObject("error")?.optString("message").orEmpty() }.getOrDefault("")
+    private fun reason(detail: String, code: Int, where: String) =
+        where + " → " + runCatching { JSONObject(detail).optJSONObject("error")?.optString("message").orEmpty() }.getOrDefault("")
             .ifBlank { "Spotify 응답 $code" }
 
     // ---- library and discovery -------------------------------------------------------------
