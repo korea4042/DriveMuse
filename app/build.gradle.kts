@@ -16,9 +16,11 @@ android {
     if (ksFile.exists()) {
         signingConfigs.getByName("debug") {
             storeFile = ksFile
-            storePassword = providers.gradleProperty("drivemuseStorePassword").orNull ?: "drivemuse"
-            keyAlias = providers.gradleProperty("drivemuseKeyAlias").orNull ?: "drivemuse"
-            keyPassword = providers.gradleProperty("drivemuseKeyPassword").orNull ?: "drivemuse"
+            // Fixed credentials: this is a throwaway debug key, and a blank/typo'd secret must not
+            // silently fall back to the runner's random key (that would change the OAuth SHA-1).
+            storePassword = "drivemuse"
+            keyAlias = "drivemuse"
+            keyPassword = "drivemuse"
         }
     }
     buildFeatures { compose = true; buildConfig = true }

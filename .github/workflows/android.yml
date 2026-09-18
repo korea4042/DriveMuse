@@ -7,8 +7,6 @@ jobs:
       ORG_GRADLE_PROJECT_ytApiKey: ${{ secrets.YT_API_KEY }}
       ORG_GRADLE_PROJECT_weatherApiKey: ${{ secrets.WEATHER_API_KEY }}
       ORG_GRADLE_PROJECT_geminiModel: ${{ vars.GEMINI_MODEL }}
-      ORG_GRADLE_PROJECT_drivemuseStorePassword: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
-      ORG_GRADLE_PROJECT_drivemuseKeyPassword: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -26,11 +24,19 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > drivemuse.keystore
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "No DEBUG_KEYSTORE_B64 secret; falling back to the runner's generated debug key."
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > drivemuse.keystore
+          echo "decoded bytes: $(stat -c%s drivemuse.keystore)"
+          if keytool -list -keystore drivemuse.keystore -alias drivemuse -storepass drivemuse > /dev/null 2>&1; then
+            keytool -list -v -keystore drivemuse.keystore -alias drivemuse -storepass drivemuse | grep 'SHA1:'
             echo "Using the stable debug keystore from secrets."
           else
-            echo "No DEBUG_KEYSTORE_B64 secret; falling back to the runner's generated debug key."
+            echo "::error::DEBUG_KEYSTORE_B64 did not decode into a readable keystore. Re-copy the single-line base64 value."
+            keytool -list -keystore drivemuse.keystore -alias drivemuse -storepass drivemuse || true
+            exit 1
           fi
       - name: Optional Firebase configuration
         env:
