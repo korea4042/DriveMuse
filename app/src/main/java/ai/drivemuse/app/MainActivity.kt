@@ -69,8 +69,20 @@ class MainActivity: ComponentActivity() {
     LaunchedEffect(pendingRedirect) {
         pendingRedirect?.takeIf { it.scheme == "drivemuse" }?.let { uri -> cvm.onSpotifyRedirect(uri); redirectFlow.value = null }
     }
+    // Sideloaded builds have no store behind them: check and fetch on launch, prompt when parked.
+    val updateState by UpdateManager.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { UpdateManager.prepare(appContext) }
     val rules by vm.rules.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
+    (updateState as? UpdateState.Ready)?.takeIf { !ui.driving }?.let { ready ->
+        AlertDialog(
+            onDismissRequest = { UpdateManager.dismiss() },
+            title = { Text("새 버전 ${ready.info.versionName}") },
+            text = { Text("설치된 버전은 ${ready.info.installedVersionName}입니다. 지금 설치할까요? 기존 설정과 기록은 그대로 유지됩니다.") },
+            confirmButton = { TextButton(onClick = { UpdateManager.install(appContext, ready.file) }) { Text("설치") } },
+            dismissButton = { TextButton(onClick = { UpdateManager.dismiss() }) { Text("나중에") } }
+        )
+    }
     BackHandler(enabled=(survey?.completed==true) && ui.page!="홈" && !ui.driving) { vm.page(if(ui.page.startsWith("설정/")) "설정" else "홈") }
     val snackbar = remember { SnackbarHostState() }
     var deleteWhat by remember { mutableStateOf<String?>(null) }

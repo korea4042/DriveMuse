@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Sideloaded builds update themselves; the system installer still asks the user. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <queries><package android:name="com.google.android.apps.youtube.music"/><package android:name="com.spotify.music"/></queries>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <application android:name=".DriveApplication" android:label="DriveMuse" android:theme="@style/AppTheme" android:icon="@drawable/ic_drivemuse" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true">
@@ -20,6 +22,9 @@
         <receiver android:name=".VehicleReceiver" android:exported="true">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.bluetooth.device.action.ACL_CONNECTED"/><action android:name="android.bluetooth.device.action.ACL_DISCONNECTED"/></intent-filter>
         </receiver>
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_paths"/>
+        </provider>
     <service android:name=".playback.MediaObservationService" android:label="DriveMuse 재생 연동 진단" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
             <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
         </service>

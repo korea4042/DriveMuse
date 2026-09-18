@@ -220,17 +220,21 @@ import java.time.format.DateTimeFormatter
 /** Offers the newer build when CI has published one; installing stays a user action. */
 @Composable fun UpdateRow() {
     val context = LocalContext.current
-    var info by remember { mutableStateOf<UpdateInfo?>(null) }
-    var checked by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { info = runCatching { UpdateChecker.check() }.getOrNull(); checked = true }
-    val update = info
-    if (update != null) GlassSurface {
-        Text("새 버전 ${update.versionName}이 있어요", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
-        Text("설치된 버전은 ${update.installedVersionName}입니다. 내려받아 덮어쓰기로 설치하세요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
-        DriveButton("새 버전 내려받기") {
-            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(update.downloadUrl))) }
+    val state by UpdateManager.state.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { UpdateManager.prepare(context) }
+    when (val s = state) {
+        is UpdateState.Downloading -> GlassSurface {
+            Text("새 버전을 내려받는 중 ${s.percent}%", fontSize = 16.sp, lineHeight = 24.sp)
+            LinearProgressIndicator(progress = { s.percent / 100f }, modifier = Modifier.fillMaxWidth())
         }
-    } else if (checked) Text("최신 버전을 사용 중이에요", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        is UpdateState.Ready -> GlassSurface {
+            Text("새 버전 ${s.info.versionName} 준비됨", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text("설치된 버전은 ${s.info.installedVersionName}입니다. 설정과 기록은 그대로 유지됩니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            DriveButton("지금 설치") { UpdateManager.install(context, s.file) }
+        }
+        is UpdateState.Failed -> Text("업데이트 확인 실패 · ${s.reason}", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        else -> Text("최신 버전을 사용 중이에요", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+    }
 }
 
 /**
