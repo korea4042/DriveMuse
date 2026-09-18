@@ -64,11 +64,11 @@ class SpotifyApi(private val auth: SpotifyAuth) {
                 401 -> throw SpotifyAuthRequired()
                 403 -> {
                     val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()
-                    if ("premium" in detail.lowercase()) throw SpotifyPremiumRequired() else throw SpotifyUnavailable(reason(detail, code))
+                    if ("premium" in detail.lowercase()) throw SpotifyPremiumRequired() else throw SpotifyUnavailable(reason(detail, code, path))
                 }
                 404 -> {
                     val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()
-                    if ("device" in detail.lowercase()) throw SpotifyNoActiveDevice() else throw SpotifyUnavailable(reason(detail, code))
+                    if ("device" in detail.lowercase()) throw SpotifyNoActiveDevice() else throw SpotifyUnavailable(reason(detail, code, path))
                 }
                 429 -> {
                     val wait = c.getHeaderField("Retry-After")?.toLongOrNull() ?: 2
@@ -76,13 +76,13 @@ class SpotifyApi(private val auth: SpotifyAuth) {
                     delay(wait.coerceAtMost(10) * 1000)
                     return@withContext request(method, path, params, body, retry = false)
                 }
-                else -> throw SpotifyUnavailable(reason(c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty(), code))
+                else -> throw SpotifyUnavailable(reason(c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty(), code, path))
             }
         } finally { c.disconnect() }
     }
 
-    private fun reason(detail: String, code: Int) =
-        runCatching { JSONObject(detail).optJSONObject("error")?.optString("message").orEmpty() }.getOrDefault("")
+    private fun reason(detail: String, code: Int, path: String) =
+        path + ": " + runCatching { JSONObject(detail).optJSONObject("error")?.optString("message").orEmpty() }.getOrDefault("")
             .ifBlank { "Spotify 응답 $code" }
 
     // ---- library and discovery -------------------------------------------------------------
@@ -100,11 +100,11 @@ class SpotifyApi(private val auth: SpotifyAuth) {
             }.orEmpty()
 
     suspend fun topTracks(timeRange: String = "medium_term", limit: Int = 50): List<SpotifyTrack> =
-        request("GET", "me/top/tracks", mapOf("time_range" to timeRange, "limit" to limit.coerceIn(1, 50).toString()))
+        request("GET", "me/top/tracks", mapOf("time_range" to timeRange, "limit" to limit.coerceIn(1, 49).toString()))
             ?.optJSONArray("items").toTracks()
 
     suspend fun topArtistIds(limit: Int = 20): List<String> =
-        request("GET", "me/top/artists", mapOf("limit" to limit.coerceIn(1, 50).toString()))
+        request("GET", "me/top/artists", mapOf("limit" to limit.coerceIn(1, 49).toString()))
             ?.optJSONArray("items")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("id")?.takeIf { id -> id.isNotBlank() } } }
             .orEmpty()
 

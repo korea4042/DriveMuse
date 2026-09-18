@@ -125,9 +125,9 @@ import java.time.format.DateTimeFormatter
         }
         GlassSurface {
             Text(if (hasMediaId) "청취 상태를 확인하고 있어요" else "Spotify 재생 상태를 직접 받습니다", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
-            Text("청취 상태 접근을 허용하면 어떤 곡이 얼마나 재생됐는지 확인해 학습에 쓸 수 있어요. 허용해도 자동 전환은 켜지지 않습니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            Text("Spotify는 App Remote가 재생 상태를 직접 알려주므로 알림 접근 권한이 필요 없습니다. 예전 YouTube 연동용 기능이라 허용해도 달라지는 것이 없어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             DriveButton("청취 상태 접근 허용") { onOpenNotificationSettings() }
-            Expander("개발 진단") { Text("재생 연동 수준 L0 · 열기 전용 / 관측 상태 $diagnosticState / 곡 ID 제공 $hasMediaId / 재생 위치 ${positionMs?.let { "${it}ms" } ?: "미상"}", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+            Expander("개발 진단") { Text("재생 연동 Spotify App Remote / 알림 접근 " + (if (accessGranted) "허용" else "꺼짐") + " (Spotify에는 사용하지 않음) / 관측 상태 $diagnosticState / 재생 위치 ${positionMs?.let { "${it}ms" } ?: "미상"}", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
         }
     }
 }
@@ -204,7 +204,9 @@ import java.time.format.DateTimeFormatter
             Text("집 " + (if (Zone.HOME in zones) "등록됨" else "미등록") + " · 회사 " + (if (Zone.WORK in zones) "등록됨" else "미등록"),
                 fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             Text("등록한 중심점과 반경만 기기에 암호화 저장합니다. 이동 경로는 저장하지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
-            DriveButton("현재 위치를 집으로 등록", !driving, onRegisterHome); DriveButton("현재 위치를 회사로 등록", !driving, onRegisterWork)
+            DriveButton(if (Zone.HOME in zones) "집 위치 다시 등록" else "현재 위치를 집으로 등록", !driving, onRegisterHome)
+            DriveButton(if (Zone.WORK in zones) "회사 위치 다시 등록" else "현재 위치를 회사로 등록", !driving, onRegisterWork)
+            Text("실내에서는 위치가 잡히지 않을 수 있어요. 창가나 실외에서 시도해 주세요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             if (!driving) TextButton(onClick = onDelete, modifier = Modifier.heightIn(min = 48.dp)) { Text("등록 장소 삭제") }
         }
     }

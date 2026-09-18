@@ -37,8 +37,11 @@ object RuleEngine {
         val scope = when { "퇴근" in text -> DriveContext.COMMUTE_HOME; "출근" in text -> DriveContext.COMMUTE_TO_WORK; "여행" in text -> DriveContext.TRAVEL; "야간" in text -> DriveContext.NIGHT_DRIVE; else -> null }
         val ratio = Regex("(-?\\d+(?:\\.\\d+)?)\\s*%").find(text)?.groupValues?.get(1)?.toDouble()?.div(100)
         if (ratio != null && ratio !in 0.0..1.0) return null
-        val quiet = listOf("잔잔", "조용", "시끄러운 곡 제외", "시끄러운 곡은 빼").any { it in text }
-        if (ratio == null && !quiet) return null
+        val quiet = listOf("잔잔", "조용", "차분", "편안", "시끄러운 곡 제외", "시끄러운 곡은 빼").any { it in text }
+        val lively = listOf("신나", "신나게", "리드미컬", "경쾌", "빠른", "에너지").any { it in text }
+        // A scope on its own is a usable rule ("퇴근길에는 팝송"): it pins the context even when no
+        // number or mood word follows. Only a sentence with nothing recognisable is rejected.
+        if (ratio == null && !quiet && !lively && scope == null) return null
         return MusicRule(id, scope, text, ratio, if (quiet) .55 else null, createdAt = now)
     }
 }

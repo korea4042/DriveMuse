@@ -126,12 +126,21 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     val poolStatus = poolMutable.asStateFlow()
     fun refreshPool() {
         viewModelScope.launch {
+            // Name what each Spotify source returned; "pool empty" alone never says which step failed.
+            val probe = runCatching {
+                val me = runtime.spotify.me()
+                val product = me?.optString("product").orEmpty()
+                val saved = runCatching { runtime.spotify.savedTracks(5).size }.getOrElse { -1 }
+                val top = runCatching { runtime.spotify.topTracks(limit = 5).size }.getOrElse { -1 }
+                val search = runCatching { runtime.spotify.search("pop", 5).size }.getOrElse { -1 }
+                "계정 " + (product.ifBlank { "확인 불가" }) + " · 저장 $saved · 인기 $top · 검색 $search"
+            }.getOrElse { "Spotify 조회 실패: " + (it.message ?: it::class.simpleName) }
             val before = dao.candidateCount(0)
             val outcome = runCatching { repository.refreshReport(settings.value) }
             val after = dao.candidateCount(0)
             poolMutable.value = outcome.fold(
                 onSuccess = { "후보 ${after}곡 · " + it.describe() },
-                onFailure = { "후보 ${after}곡 · 불러오기 실패: " + (it.message ?: it::class.simpleName) }
+                onFailure = { "후보 ${after}곡 · $probe · 실패: " + (it.message ?: it::class.simpleName) }
             )
             message(poolMutable.value)
         }
@@ -283,7 +292,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun parseRule(text: String) {
         if(ui.value.driving) return
         val parsed = RuleEngine.parse(text.take(240),UUID.randomUUID().toString(),System.currentTimeMillis())
-        if (parsed==null) message("예: ‘퇴근길에는 잔잔하게, 새 노래 30%’처럼 입력해 주세요")
+        if (parsed==null) message("‘퇴근길/출근길/여행/야간’, ‘잔잔하게·신나게’, ‘새 노래 30%’ 중 하나는 포함해 주세요")
         else mutable.update { it.copy(pendingRule=parsed) }
     }
     fun confirmRule(save: Boolean) { if(save) cancelSelection(); val r=ui.value.pendingRule; mutable.update { it.copy(pendingRule=null) }; if(save && r!=null && !ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(RuleEntity.from(r)) } }
