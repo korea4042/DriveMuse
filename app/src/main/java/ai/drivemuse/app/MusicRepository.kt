@@ -21,6 +21,8 @@ class MusicRepository(
     private val seedMutex=Mutex()
     /** Survey phrases kept from the last seeding pass, so a thin pool can reuse them. */
     @Volatile private var lastSurveySeeds: List<String> = emptyList()
+    /** Why the last refresh produced nothing, for the diagnostics line (§20). */
+    @Volatile var lastError: String? = null; private set
     suspend fun addSurveyCandidates(answers: List<SurveyAnswer>) = seedMutex.withLock {
         val phrases=answers.filter { it.status==AnswerStatus.ANSWERED }.sortedByDescending { it.question.id=="Q7" }.flatMap { a ->
             if(a.freeText.isNotBlank()) listOf(a.freeText.take(120)) else if(a.question.intent==Intent.PREFERENCE) a.question.options.filter { it.id in a.selected }.map { it.label+" music" } else emptyList()
@@ -175,6 +177,8 @@ class MusicRepository(
     suspend fun recordPlay(videoId: String) {
         if (Policy.validTrackId(videoId)) dao.putPlayed(PlayedEntity(videoId = videoId, playedAt = System.currentTimeMillis()))
     }
+
+    private fun note(e: Throwable) = (e.message ?: e::class.simpleName ?: "알 수 없는 오류").take(120)
 
     suspend fun clearCache() { dao.clearCandidates(); dao.clearPlayed() }
 }

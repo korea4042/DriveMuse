@@ -39,7 +39,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val coordinator=QueueCoordinator(db)
     private val learning=LearningStore(db)
     private val location=LocationAdapter(application)
-    private val weather=WeatherRepository { runtime.secret(ProviderId.WEATHER,"apiKey") ?: "" }
+    private val weather=WeatherRepository()
     private var region: Region?=null
     private var weatherFact: WeatherFact?=null
     private var contextVersion=0L
@@ -224,7 +224,16 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,listOf(0,1,2),novelty,MixTarget.resolve(p))
                 val queue=selection.tracks
                 if(generation!=selectionGeneration || survey.value?.revision!=revision) return@launch
-                check(queue.isNotEmpty()) { if (effective.energyCeiling < 1.0) "잔잔한 곡 조건에 맞는 후보가 없습니다. 규칙을 조정해 주세요" else "조건에 맞는 곡이 없습니다. 규칙을 조정해 주세요" }
+                // Saying "adjust your rules" is wrong when the pool itself is empty, which is the
+                // common case right after switching providers.
+                check(queue.isNotEmpty()) {
+                    val pool = tracks.size
+                    when {
+                        pool == 0 -> "후보가 비어 있어요 · 설정 → 음악 서비스에서 ‘후보 다시 불러오기’를 눌러 주세요" + (repository.lastError?.let { " ($it)" } ?: "")
+                        effective.energyCeiling < 1.0 -> "잔잔한 곡 조건에 맞는 후보가 없습니다. 규칙을 조정해 주세요"
+                        else -> "후보 ${pool}곡 중 조건을 통과한 곡이 없습니다. 규칙과 제외 조건을 확인해 주세요"
+                    }
+                }
                 if(!snapshot.demo && !coordinator.commit(version,queue,prepared,constraints)) return@launch
                 if(generation!=selectionGeneration || survey.value?.revision!=revision) return@launch
                 progress=progress.append(queue)

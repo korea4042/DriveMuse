@@ -24,7 +24,11 @@ import javax.crypto.spec.GCMParameterSpec
 import kotlin.coroutines.resume
 import kotlin.math.*
 
-data class Region(val x: Int,val y: Int,val zone: Zone,val measuredAt: Long) { val id get()="$x:$y" }
+/**
+ * §4: the raw fix never leaves this module. lat/lon are rounded to one decimal (~11 km) before
+ * anything else sees them, which is enough for a regional forecast and not a trail.
+ */
+data class Region(val x: Int,val y: Int,val zone: Zone,val measuredAt: Long,val lat: Double=0.0,val lon: Double=0.0) { val id get()="$x:$y" }
 object KmaGrid {
     fun from(latitude: Double,longitude: Double): Pair<Int,Int>? {
         if(latitude !in 32.0..40.0 || longitude !in 123.0..133.0) return null
@@ -47,7 +51,9 @@ class LocationAdapter(private val context: Context) {
         lastAttempt=now
         val location=current()?:return null
         val pair=KmaGrid.from(location.latitude,location.longitude)?:return null
-        return Region(pair.first,pair.second,regions.classify(location),location.time).also { cached=it }
+        val coarseLat = Math.round(location.latitude * 10) / 10.0
+        val coarseLon = Math.round(location.longitude * 10) / 10.0
+        return Region(pair.first,pair.second,regions.classify(location),location.time,coarseLat,coarseLon).also { cached=it }
     }
     fun registeredZones(): Set<Zone> = regions.registered()
     suspend fun register(zone: Zone): Boolean {

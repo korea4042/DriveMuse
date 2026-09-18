@@ -191,7 +191,7 @@ import java.time.format.DateTimeFormatter
             DriveButton("현재 위치로 날씨 갱신", !driving, onClick = onRefresh)
         }
         IntegrationCard(cvm, ProviderId.WEATHER, integrations.getValue(ProviderId.WEATHER), busy == ProviderId.WEATHER, driving,
-            "공공데이터포털에서 기상청 단기예보 API를 신청하고 받은 일반 인증키(디코딩)를 넣으세요. 저장하면 실제 조회로 확인합니다.")
+            "Open-Meteo를 사용합니다. 키가 필요 없고, 위치는 약 11km 단위로 반올림해서 보냅니다.")
     }
 }
 
