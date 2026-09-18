@@ -5,6 +5,8 @@ import ai.drivemuse.app.discovery.*
 import ai.drivemuse.app.integration.*
 import ai.drivemuse.app.knowledge.*
 import ai.drivemuse.app.onboarding.SurveyStore
+import ai.drivemuse.app.spotify.SpotifyApi
+import ai.drivemuse.app.spotify.SpotifyAuth
 import ai.drivemuse.domain.*
 import android.content.Context
 import kotlinx.coroutines.flow.first
@@ -35,6 +37,17 @@ class IntegrationRuntime private constructor(context: Context) {
         LastFmAdapter(lastFmHttp, { secret(ProviderId.LASTFM, "apiKey") }),
         ListenBrainzAdapter(listenBrainzHttp, { secret(ProviderId.LISTENBRAINZ, "userName") }, { secret(ProviderId.LISTENBRAINZ, "token") })
     ))
+    /**
+     * §22 Spotify: the Client ID is entered in settings and the refresh token is written back into
+     * the same encrypted store, so signing out removes it with the rest of the credential.
+     */
+    val spotifyAuth = SpotifyAuth(
+        context.applicationContext,
+        clientId = { secret(ProviderId.SPOTIFY, "clientId") },
+        readRefresh = { secret(ProviderId.SPOTIFY, "refreshToken") },
+        writeRefresh = { value -> runBlocking { integrations.putSecret(ProviderId.SPOTIFY, "refreshToken", value) } }
+    )
+    val spotify = SpotifyApi(spotifyAuth)
     val coordinator = DiscoveryCoordinator(db, youtube, registry)
     val surveyStore = SurveyStore(db)
     val prefs = Preferences(context)

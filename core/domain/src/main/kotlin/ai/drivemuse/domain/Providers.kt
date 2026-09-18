@@ -8,8 +8,8 @@ package ai.drivemuse.domain
  */
 
 enum class Capability { LOOKUP_IDENTITY, FETCH_METADATA, DISCOVER_RELATED, DISCOVER_RESOURCES }
-enum class ProviderId { YOUTUBE, MUSICBRAINZ, LASTFM, LISTENBRAINZ, FIREBASE_AI, GEMINI_DIRECT, WEATHER }
-enum class AuthMode { NONE, API_KEY, OAUTH_GOOGLE, USERNAME_OPTIONAL_TOKEN, FIREBASE_CONFIG, PENDING_PROVIDER_SELECTION }
+enum class ProviderId { YOUTUBE, SPOTIFY, MUSICBRAINZ, LASTFM, LISTENBRAINZ, FIREBASE_AI, GEMINI_DIRECT, WEATHER }
+enum class AuthMode { NONE, API_KEY, OAUTH_GOOGLE, OAUTH_PKCE, USERNAME_OPTIONAL_TOKEN, FIREBASE_CONFIG, PENDING_PROVIDER_SELECTION }
 
 data class CredentialField(val key: String, val label: String, val secret: Boolean, val required: Boolean)
 
@@ -18,6 +18,8 @@ object ProviderRequirements {
     fun fields(p: ProviderId): List<CredentialField> = when (p) {
         // §22: a linked Google account already authorizes public reads, so the key is a fallback for signed-out use.
         ProviderId.YOUTUBE -> listOf(CredentialField("apiKey", "YouTube Data API 키 (계정 연결 시 생략 가능)", true, false))
+        // §22: an Android Spotify app is a public client — PKCE, so a Client ID and no secret.
+        ProviderId.SPOTIFY -> listOf(CredentialField("clientId", "Spotify Client ID", false, true))
         ProviderId.MUSICBRAINZ -> emptyList()
         ProviderId.LASTFM -> listOf(CredentialField("apiKey", "Last.fm API 키", true, true))
         ProviderId.LISTENBRAINZ -> listOf(CredentialField("userName", "ListenBrainz 사용자명 (선택)", false, false), CredentialField("token", "ListenBrainz 토큰 (개인 기능에만)", true, false))
@@ -26,7 +28,7 @@ object ProviderRequirements {
         ProviderId.WEATHER -> emptyList()   // provider not selected yet (§22/§28)
     }
     fun authMode(p: ProviderId) = when (p) {
-        ProviderId.YOUTUBE -> AuthMode.API_KEY; ProviderId.MUSICBRAINZ -> AuthMode.NONE; ProviderId.LASTFM -> AuthMode.API_KEY
+        ProviderId.YOUTUBE -> AuthMode.API_KEY; ProviderId.SPOTIFY -> AuthMode.OAUTH_PKCE; ProviderId.MUSICBRAINZ -> AuthMode.NONE; ProviderId.LASTFM -> AuthMode.API_KEY
         ProviderId.LISTENBRAINZ -> AuthMode.USERNAME_OPTIONAL_TOKEN; ProviderId.FIREBASE_AI -> AuthMode.FIREBASE_CONFIG
         ProviderId.GEMINI_DIRECT -> AuthMode.API_KEY; ProviderId.WEATHER -> AuthMode.PENDING_PROVIDER_SELECTION
     }
@@ -36,6 +38,8 @@ object ProviderRequirements {
         if (required.any { it !in present }) return emptySet()
         return when (p) {
             ProviderId.YOUTUBE -> setOf(Capability.DISCOVER_RESOURCES, Capability.FETCH_METADATA)
+            // Spotify identifies the recording itself and can control playback, so it covers both.
+            ProviderId.SPOTIFY -> setOf(Capability.DISCOVER_RESOURCES, Capability.FETCH_METADATA, Capability.DISCOVER_RELATED)
             ProviderId.MUSICBRAINZ -> setOf(Capability.LOOKUP_IDENTITY, Capability.FETCH_METADATA, Capability.DISCOVER_RELATED)
             ProviderId.LASTFM -> setOf(Capability.FETCH_METADATA)
             ProviderId.LISTENBRAINZ -> setOf(Capability.DISCOVER_RELATED) // personal recommendations need userName; checked at call time

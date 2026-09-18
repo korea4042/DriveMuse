@@ -95,6 +95,20 @@ class IntegrationConfigRepository(private val db: DriveDatabase, private val cre
     }
 
     /** Cancel provider jobs → deactivate reference → delete secret → clear auth-derived caches (order from §23). */
+    /**
+     * Merges one value into a provider's stored credential without re-validating: used for tokens the
+     * app itself obtains (a rotated Spotify refresh token), never for values typed by the user.
+     */
+    suspend fun putSecret(p: ProviderId, key: String, value: String?) = mutex.withLock {
+        val cfg = dao.integration(p.name)?.domain() ?: IntegrationConfig(p)
+        val ref = cfg.credentialRef ?: "${p.name.lowercase()}:${System.currentTimeMillis()}"
+        val merged = credentials.get(ref).toMutableMap()
+        if (value.isNullOrBlank()) merged.remove(key) else merged[key] = value
+        credentials.put(ref, merged)
+        persist(cfg.copy(credentialRef = ref, presentKeys = merged.keys))
+        Unit
+    }
+
     suspend fun remove(p: ProviderId, afterDeactivate: suspend () -> Unit = {}): IntegrationConfig = mutex.withLock {
         val previous = active(p); val next = IntegrationPolicy.remove(previous)
         db.withTransaction { dao.putIntegration(IntegrationConfigEntity.from(next)); dao.bumpGeneration("default") }
