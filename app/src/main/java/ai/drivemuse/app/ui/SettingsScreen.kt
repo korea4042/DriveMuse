@@ -133,8 +133,11 @@ import java.time.format.DateTimeFormatter
     val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("AI 추천", "설정이 끝난 뒤에만 사용할 수 있어요")
+        IntegrationCard(cvm, ProviderId.GEMINI_DIRECT, integrations.getValue(ProviderId.GEMINI_DIRECT), busy == ProviderId.GEMINI_DIRECT, driving,
+            "가장 간단한 방법이에요. Google AI Studio에서 받은 개인 API 키와 모델 ID만 넣으면 됩니다. 키는 기기에 암호화 저장되는 개인용 모드이며, 배포용 앱에는 아래 Firebase 방식을 권합니다.")
+        SectionTitle("또는 Firebase로 연결")
         IntegrationCard(cvm, ProviderId.FIREBASE_AI, integrations.getValue(ProviderId.FIREBASE_AI), busy == ProviderId.FIREBASE_AI, driving,
-            "Firebase 콘솔의 프로젝트 ID, 앱 ID, 웹 API 키와 사용할 모델 ID를 입력하세요. 서비스 계정 키가 아니라 앱 구성 값입니다. 앱 등록과 App Check는 콘솔에서 따로 설정합니다.")
+            "Firebase 콘솔의 프로젝트 ID, 앱 ID, 웹 API 키와 모델 ID를 입력하세요. 서비스 계정 키가 아니라 앱 구성 값입니다. 앱 등록과 App Check는 콘솔에서 따로 설정합니다.")
         GlassSurface {
             Text(when { !configReady -> "설정 필요"; IntegrationPolicy.effectiveEnabled(requested, configReady) -> "사용 중"; else -> "꺼짐" }, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             if (!configReady) { Text("구성이 없으면 기본 선곡을 사용합니다. 빌드에 google-services.json이 포함된 경우에도 동작합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted); DriveButton("AI 연결 설정 안내") { onSetupHelp() } }

@@ -138,6 +138,21 @@ object Probes {
             }
         }
     }
+    fun geminiDirect(): suspend (Map<String, String>) -> ProbeResult = { v ->
+        val key = v["apiKey"]?.trim().orEmpty(); val model = v["modelId"]?.trim().orEmpty()
+        if (key.isBlank() || model.isBlank()) ProbeResult(false, IntegrationError.UNKNOWN, "API 키와 모델 ID가 필요합니다")
+        else try {
+            ai.drivemuse.app.gemini.GeminiDirectClient(key, model).generateJson("Reply with {\"ok\":true} only.", "ping", 32)
+            ProbeResult(true)
+        } catch (e: ai.drivemuse.app.gemini.GeminiDirectException) {
+            ProbeResult(false, when (e.kind) {
+                ai.drivemuse.app.gemini.GeminiDirectException.Kind.AUTH -> IntegrationError.PERMISSION
+                ai.drivemuse.app.gemini.GeminiDirectException.Kind.MODEL -> IntegrationError.API_NOT_ENABLED
+                ai.drivemuse.app.gemini.GeminiDirectException.Kind.QUOTA -> IntegrationError.QUOTA
+                else -> IntegrationError.NETWORK
+            }, e.message ?: "")
+        } catch (e: Exception) { ProbeResult(false, IntegrationError.NETWORK, e.message ?: "") }
+    }
     fun lastFm(http: ai.drivemuse.app.knowledge.ProviderHttp): suspend (Map<String, String>) -> ProbeResult = { v ->
         try {
             val j = http.getJson("https://ws.audioscrobbler.com/2.0/?method=track.getTopTags&api_key=${http.enc(v.getValue("apiKey"))}&artist=cher&track=believe&format=json")

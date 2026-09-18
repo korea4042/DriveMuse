@@ -34,7 +34,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val intelligence=db.intelligence()
     private val surveyStore=SurveyStore(db)
     private val runtime = IntegrationRuntime.get(application)
-    private val gateway=RoleGateway(application,intelligence) { runtime.secrets(ProviderId.FIREBASE_AI) }
+    private val gateway=RoleGateway(application,intelligence,{ runtime.secrets(ProviderId.FIREBASE_AI) },{ runtime.secrets(ProviderId.GEMINI_DIRECT) })
     private val engine=RecommendationEngine(gateway)
     private val coordinator=QueueCoordinator(db)
     private val playback=YouTubeMusicAdapter(application)

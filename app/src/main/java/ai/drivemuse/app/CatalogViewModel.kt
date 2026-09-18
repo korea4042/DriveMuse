@@ -66,7 +66,7 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
                     ProviderId.LASTFM -> Probes.lastFm(runtime.lastFmHttp)
                     ProviderId.LISTENBRAINZ -> Probes.listenBrainz(runtime.listenBrainzHttp)
                     ProviderId.FIREBASE_AI -> Probes.firebaseAi(getApplication<Application>())
-                    ProviderId.GEMINI_DIRECT -> { _ -> ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "개인 Gemini 키 직접 연결은 아직 제공하지 않습니다") }
+                    ProviderId.GEMINI_DIRECT -> Probes.geminiDirect()
                     ProviderId.MUSICBRAINZ -> { _ -> ai.drivemuse.app.integration.ProbeResult(true) }
                     ProviderId.WEATHER -> { _ -> ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "날씨 제공자가 아직 확정되지 않았습니다") }
                 }
