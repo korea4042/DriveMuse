@@ -52,7 +52,7 @@ class SpotifyRemote(private val clientId: () -> String?) {
         val result = suspendCancellableCoroutine<Pair<SpotifyAppRemote?, String?>> { cont ->
             SpotifyAppRemote.connect(context.applicationContext, params, object : Connector.ConnectionListener {
                 override fun onConnected(appRemote: SpotifyAppRemote) { if (cont.isActive) cont.resume(appRemote to null) }
-                override fun onFailure(error: Throwable) { if (cont.isActive) cont.resume(null to (error.message ?: "Spotify 연결 실패")) }
+                override fun onFailure(error: Throwable) { if (cont.isActive) cont.resume(null to explain(error)) }
             })
         }
         val connectedRemote = result.first ?: return result.second
@@ -66,6 +66,21 @@ class SpotifyRemote(private val clientId: () -> String?) {
             )
         }
         null
+    }
+
+    /** App Remote failures arrive as exception classes with empty messages; name what each one means. */
+    private fun explain(error: Throwable): String {
+        val kind = error::class.simpleName ?: "Unknown"
+        val hint = when {
+            "CouldNotFindSpotifyApp" in kind -> "기기에 Spotify 앱이 없어요"
+            "NotLoggedIn" in kind -> "Spotify 앱에 로그인해 주세요"
+            "UserNotAuthorized" in kind || "AuthenticationFailed" in kind -> "Spotify 대시보드에 이 앱의 패키지명·SHA-1·Redirect URI가 등록돼 있는지 확인해 주세요"
+            "Offline" in kind -> "Spotify가 오프라인 상태예요"
+            "UnsupportedFeatureVersion" in kind -> "Spotify 앱을 최신 버전으로 업데이트해 주세요"
+            "SpotifyDisconnected" in kind || "SpotifyConnectionTerminated" in kind -> "Spotify 연결이 끊겼어요. 다시 시도해 주세요"
+            else -> error.message?.takeIf { it.isNotBlank() } ?: "Spotify 연결 실패"
+        }
+        return "$hint ($kind)"
     }
 
     fun disconnect() { remote?.let { SpotifyAppRemote.disconnect(it) }; remote = null; stateMutable.value = null }

@@ -277,9 +277,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if (!ai.drivemuse.app.spotify.SpotifyIds.isTrackId(track.id)) { message("예전 목록의 곡이에요. 설정에서 후보를 새로 불러와 주세요"); return }
         if (!Constraints(excludedGenres = profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다"); return }
         viewModelScope.launch {
+            message("Spotify에 연결하는 중…")
             val failure = runtime.spotifyRemote.connect(getApplication())
-            if (failure != null) { message(failure); return@launch }
-            if (!runtime.spotifyRemote.play(track.id)) { message("Spotify 앱이 응답하지 않아요. Spotify에서 한 번 재생한 뒤 다시 시도해 주세요"); return@launch }
+            if (failure != null || !runtime.spotifyRemote.play(track.id)) {
+                // App Remote could not bind; a device that is already awake can still take a Web API command.
+                val fallback = runCatching { runtime.spotify.play(track.id) }
+                if (fallback.isSuccess) message("${track.artist} ${track.title} 재생 중 (Web API)")
+                else message((failure ?: "App Remote 명령 실패") + " · Web API: " + (fallback.exceptionOrNull()?.message ?: "실패"))
+                return@launch
+            }
             message("${track.artist} ${track.title} 재생 중")
             // Exposure only (§17 EXPOSED_ONLY); a listening outcome needs observed playback.
             if (!ui.value.demo) {
