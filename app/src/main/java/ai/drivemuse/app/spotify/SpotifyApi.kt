@@ -24,7 +24,7 @@ data class SpotifyTrack(
 }
 
 /** What the player is doing right now, as one poll of /me/player sees it. */
-data class SpotifyPlayback(
+data class SpotifyPlayerState(
     val trackId: String?, val playing: Boolean, val positionMs: Long,
     val durationMs: Long, val deviceId: String?, val deviceName: String?, val observedAt: Long
 )
@@ -120,10 +120,10 @@ class SpotifyApi(private val auth: SpotifyAuth) {
             }
         }.orEmpty()
 
-    suspend fun playback(): SpotifyPlayback? {
+    suspend fun playback(): SpotifyPlayerState? {
         val root = request("GET", "me/player") ?: return null
         val item = root.optJSONObject("item")
-        return SpotifyPlayback(
+        return SpotifyPlayerState(
             trackId = item?.optString("id")?.takeIf { it.isNotBlank() },
             playing = root.optBoolean("is_playing"),
             positionMs = root.optLong("progress_ms"),
