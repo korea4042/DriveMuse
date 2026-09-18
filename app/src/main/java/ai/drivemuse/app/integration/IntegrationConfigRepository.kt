@@ -119,6 +119,28 @@ object Probes {
         catch (e: ai.drivemuse.app.QuotaExceededException) { ProbeResult(false, IntegrationError.QUOTA) }
         catch (e: IllegalStateException) { ProbeResult(false, when { "API" in (e.message ?: "") && "사용" in (e.message ?: "") -> IntegrationError.API_NOT_ENABLED; "제한" in (e.message ?: "") -> IntegrationError.KEY_RESTRICTED; "403" in (e.message ?: "") -> IntegrationError.PERMISSION; else -> IntegrationError.NETWORK }, e.message ?: "") }
     }
+    fun firebaseAi(context: android.content.Context): suspend (Map<String, String>) -> ProbeResult = { v ->
+        val app = ai.drivemuse.app.gemini.FirebaseRuntime.app(context, v)
+        when {
+            app == null -> ProbeResult(false, IntegrationError.PERMISSION, "Firebase 구성으로 초기화하지 못했습니다")
+            v["modelId"].isNullOrBlank() -> ProbeResult(false, IntegrationError.API_NOT_ENABLED, "모델 ID가 필요합니다")
+            else -> try {
+                kotlinx.coroutines.withTimeout(20_000) {
+                    com.google.firebase.Firebase.ai(app = app, backend = com.google.firebase.ai.type.GenerativeBackend.googleAI())
+                        .generativeModel(modelName = v.getValue("modelId")).generateContent("ping")
+                }
+                ProbeResult(true)
+            } catch (e: Exception) {
+                val m = e.message ?: ""
+                ProbeResult(false, when {
+                    "PERMISSION" in m || "403" in m || "App Check" in m -> IntegrationError.PERMISSION
+                    "not found" in m || "404" in m || "model" in m.lowercase() -> IntegrationError.API_NOT_ENABLED
+                    "quota" in m.lowercase() || "429" in m -> IntegrationError.QUOTA
+                    else -> IntegrationError.NETWORK
+                }, m.take(200))
+            }
+        }
+    }
     fun lastFm(http: ai.drivemuse.app.knowledge.ProviderHttp): suspend (Map<String, String>) -> ProbeResult = { v ->
         try {
             val j = http.getJson("https://ws.audioscrobbler.com/2.0/?method=track.getTopTags&api_key=${http.enc(v.getValue("apiKey"))}&artist=cher&track=believe&format=json")

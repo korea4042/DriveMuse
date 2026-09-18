@@ -129,12 +129,15 @@ import java.time.format.DateTimeFormatter
 }
 
 /** Detail: AI (§24). Toggle is only shown enabled once config is READY; effectiveEnabled drives the label. */
-@Composable fun AiDetail(configReady: Boolean, requested: Boolean, onRequested: (Boolean) -> Unit, onSetupHelp: () -> Unit) {
+@Composable fun AiDetail(cvm: CatalogViewModel, configReady: Boolean, requested: Boolean, driving: Boolean, onRequested: (Boolean) -> Unit, onSetupHelp: () -> Unit) {
+    val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("AI 추천", "설정이 끝난 뒤에만 사용할 수 있어요")
+        IntegrationCard(cvm, ProviderId.FIREBASE_AI, integrations.getValue(ProviderId.FIREBASE_AI), busy == ProviderId.FIREBASE_AI, driving,
+            "Firebase 콘솔의 프로젝트 ID, 앱 ID, 웹 API 키와 사용할 모델 ID를 입력하세요. 서비스 계정 키가 아니라 앱 구성 값입니다. 앱 등록과 App Check는 콘솔에서 따로 설정합니다.")
         GlassSurface {
             Text(when { !configReady -> "설정 필요"; IntegrationPolicy.effectiveEnabled(requested, configReady) -> "사용 중"; else -> "꺼짐" }, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
-            if (!configReady) { Text("이 빌드는 Firebase 구성 파일(google-services.json)과 모델 ID로 연결합니다. 구성이 없으면 기본 선곡을 사용합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted); DriveButton("AI 연결 설정 안내") { onSetupHelp() } }
+            if (!configReady) { Text("구성이 없으면 기본 선곡을 사용합니다. 빌드에 google-services.json이 포함된 경우에도 동작합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted); DriveButton("AI 연결 설정 안내") { onSetupHelp() } }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 48.dp)) {
                 Column(Modifier.weight(1f)) { Text("AI 추천 사용", fontWeight = FontWeight.SemiBold, fontSize = 16.sp); Text("답변, 후보 곡, 요약 반응을 Google에 전송합니다. 좌표·토큰은 보내지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
                 Switch(checked = IntegrationPolicy.effectiveEnabled(requested, configReady), onCheckedChange = onRequested, enabled = configReady, modifier = Modifier.semantics { contentDescription = if (configReady) "AI 추천 사용" else "AI 추천 사용 · 설정 필요" })

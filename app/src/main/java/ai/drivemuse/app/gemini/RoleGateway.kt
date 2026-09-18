@@ -23,11 +23,13 @@ object JsonGate {
     fun number(j: JSONObject,key: String): Double { val v=j.get(key);require(v is Number && v.toDouble().isFinite());return v.toDouble() }
     fun strings(a: JSONArray,max: Int): List<String> { require(a.length()<=max);return (0 until a.length()).map { val v=a.get(it);require(v is String && v.length<=160);v } }
 }
-class RoleGateway(private val context: Context, private val dao: IntelligenceDao, private val modelIdProvider: () -> String = { BuildConfig.GEMINI_MODEL }) {
+class RoleGateway(private val context: Context, private val dao: IntelligenceDao, private val configProvider: () -> Map<String, String> = { emptyMap() }) {
     private val quota=Mutex()
-    /** §22–§23: the promoted in-app modelId wins; BuildConfig is only an optional default (T14). */
-    private val modelId get() = modelIdProvider().ifBlank { BuildConfig.GEMINI_MODEL }
-    val configured get() = FirebaseApp.getApps(context).isNotEmpty() && modelId.isNotBlank()
+    /** §22–§23: the promoted in-app config wins; BuildConfig and google-services.json are defaults (T14). */
+    private val config get() = configProvider()
+    private val modelId get() = (config["modelId"] ?: "").ifBlank { BuildConfig.GEMINI_MODEL }
+    private val firebaseApp get() = FirebaseRuntime.app(context, config)
+    val configured get() = firebaseApp != null && modelId.isNotBlank()
     suspend fun call(role: Role, input: JSONObject, payloadSchema: Schema, validate: (JSONObject)->Unit): JSONObject = withTimeout(20000) {
         check(configured);val raw=input.toString();require(raw.length<=18000)
         val hash=MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) };val requestId=UUID.randomUUID().toString()
@@ -38,7 +40,8 @@ class RoleGateway(private val context: Context, private val dao: IntelligenceDao
         }
         val schema=Schema.obj(mapOf("role" to Schema.string(),"taskType" to Schema.string(),"promptVersion" to Schema.string(),"schemaVersion" to Schema.string(),"requestId" to Schema.string(),"inputHash" to Schema.string(),"payload" to payloadSchema))
         val system=context.assets.open("prompts/common-guard.v2.1.txt").bufferedReader().use { it.readText() }+"\n"+context.assets.open("prompts/${role.wire}.v${role.version}.txt").bufferedReader().use { it.readText() }
-        val model=Firebase.ai(backend=GenerativeBackend.googleAI()).generativeModel(modelName=modelId,systemInstruction=content { text(system) },generationConfig=generationConfig { responseMimeType="application/json";responseSchema=schema;maxOutputTokens=1500;temperature=.2f })
+        val app=firebaseApp ?: error("Firebase 구성이 없습니다")
+        val model=Firebase.ai(app=app, backend=GenerativeBackend.googleAI()).generativeModel(modelName=modelId,systemInstruction=content { text(system) },generationConfig=generationConfig { responseMimeType="application/json";responseSchema=schema;maxOutputTokens=1500;temperature=.2f })
         val request=JSONObject().put("role",role.wire).put("taskType",role.wire).put("promptVersion",role.version).put("schemaVersion",role.version).put("requestId",requestId).put("inputHash",hash).put("input",input)
         val text=model.generateContent(request.toString()).text?:error("Empty response");require(text.length<=16000)
         val response=JSONObject(text);JsonGate.keys(response,"role","taskType","promptVersion","schemaVersion","requestId","inputHash","payload")

@@ -65,7 +65,8 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
                     ProviderId.YOUTUBE -> Probes.youtube { key -> YouTubeApi(key, runtime.tokens) }
                     ProviderId.LASTFM -> Probes.lastFm(runtime.lastFmHttp)
                     ProviderId.LISTENBRAINZ -> Probes.listenBrainz(runtime.listenBrainzHttp)
-                    ProviderId.FIREBASE_AI, ProviderId.GEMINI_DIRECT -> { _ -> ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "이 빌드는 Firebase 구성 파일로만 AI를 연결합니다") }
+                    ProviderId.FIREBASE_AI -> Probes.firebaseAi(getApplication())
+                    ProviderId.GEMINI_DIRECT -> { _ -> ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "개인 Gemini 키 직접 연결은 아직 제공하지 않습니다") }
                     ProviderId.MUSICBRAINZ -> { _ -> ai.drivemuse.app.integration.ProbeResult(true) }
                     ProviderId.WEATHER -> { _ -> ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "날씨 제공자가 아직 확정되지 않았습니다") }
                 }

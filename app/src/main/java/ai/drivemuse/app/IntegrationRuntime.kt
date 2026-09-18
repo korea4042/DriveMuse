@@ -27,6 +27,7 @@ class IntegrationRuntime private constructor(context: Context) {
 
     /** Latest promoted secret, read per request. */
     fun secret(p: ProviderId, key: String): String? = runBlocking { integrations.secrets(p)[key] }
+    fun secrets(p: ProviderId): Map<String, String> = runBlocking { integrations.secrets(p) }
     private val androidIdentity = AndroidClientIdentity.of(context)
     val youtube = YouTubeApi({ secret(ProviderId.YOUTUBE, "apiKey") ?: "" }, tokens, { androidIdentity })
     val registry = ProviderRegistry(listOf(
