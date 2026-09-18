@@ -142,7 +142,13 @@ class MainActivity: ComponentActivity() {
                     // v2.3 §24: summary rows first; every detail lives one level down.
                     item { SettingsHome(vm,cvm,settings,survey?.aiConsent==true,ui.weatherLabel,diagnostic.hasMediaId,onOpen={ vm.page(it) }) { permissions.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.POST_NOTIFICATIONS)) } }
                 }
-                "설정/음악 서비스" -> item { MusicServiceDetail(vm,cvm,settings,ui.driving) { cvm.spotifyAuthorizeIntent()?.let { intent -> runCatching { context.startActivity(intent) }.onFailure { vm.message("브라우저를 열 수 없습니다") } } ?: vm.message("먼저 Spotify Client ID를 저장해 주세요") } }
+                "설정/음악 서비스" -> item {
+                    MusicServiceDetail(vm, cvm, settings, ui.driving, onSpotifyConnect = {
+                        val intent = cvm.spotifyAuthorizeIntent()
+                        if (intent == null) vm.message("먼저 Spotify Client ID를 저장해 주세요")
+                        else runCatching { appContext.startActivity(intent) }.onFailure { vm.message("브라우저를 열 수 없습니다") }
+                    })
+                }
                 "설정/재생" -> item { PlaybackDetail(diagnostic.state.toString(),diagnostic.hasMediaId,diagnostic.positionMs) { appContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } }
                 "설정/AI" -> item { AiDetail(cvm,vm.aiConfigured,survey?.aiConsent==true,ui.driving,vm::surveyConsent) { vm.message("Firebase 콘솔 → 프로젝트 설정에서 프로젝트 ID·앱 ID·웹 API 키를 확인하고, 사용할 모델 ID를 함께 입력하세요") } }
                 "설정/위치" -> item { GlassSurface { SettingsTitle("위치와 날씨","대략 위치로 지역 날씨만 확인합니다"); Text(ui.weatherLabel,fontSize=16.sp,lineHeight=24.sp); Text(if(vm.weatherConfigured) "날씨 서비스 연결됨 · 기상청 격자 실황" else "날씨 서비스 설정 필요 · 위치 없이도 추천은 동작해요",fontSize=14.sp,lineHeight=20.sp,color=DriveColors.Muted); DriveButton("현재 위치로 날씨 갱신",!ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } } }
