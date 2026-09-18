@@ -64,9 +64,9 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk DriveMuse.apk
           NOTES="버전 $VERSION · 커밋 ${GITHUB_SHA:0:7} · $(date -u -d '+9 hours' '+%Y-%m-%d %H:%M') KST"
           if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title "DriveMuse $VERSION" --notes "$NOTES"
+            gh release edit latest --title "DriveMuse $VERSION" --notes "$NOTES" --prerelease=false --latest
           else
-            gh release create latest --title "DriveMuse $VERSION" --notes "$NOTES" --prerelease
+            gh release create latest --title "DriveMuse $VERSION" --notes "$NOTES" --latest
           fi
           gh release upload latest DriveMuse.apk --clobber
       - uses: actions/upload-artifact@v4
