@@ -27,7 +27,8 @@ class IntegrationRuntime private constructor(context: Context) {
 
     /** Latest promoted secret, read per request. */
     fun secret(p: ProviderId, key: String): String? = runBlocking { integrations.secrets(p)[key] }
-    val youtube = YouTubeApi({ secret(ProviderId.YOUTUBE, "apiKey") ?: "" }, tokens)
+    private val androidIdentity = AndroidClientIdentity.of(context)
+    val youtube = YouTubeApi({ secret(ProviderId.YOUTUBE, "apiKey") ?: "" }, tokens, { androidIdentity })
     val registry = ProviderRegistry(listOf(
         MusicBrainzAdapter(musicBrainzHttp),
         LastFmAdapter(lastFmHttp, { secret(ProviderId.LASTFM, "apiKey") }),

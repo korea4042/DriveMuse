@@ -23,13 +23,29 @@ data class RawVideo(
 private enum class Auth { USER, PUBLIC }
 
 /**
+ * v2.3 §22. An API key restricted to "Android apps" is only accepted when the request carries the
+ * caller's package and signing certificate. Plain HttpsURLConnection does not add them — the Google
+ * client libraries do — so a restricted key fails with 403 until these headers are sent.
+ */
+data class AndroidClientIdentity(val packageName: String, val sha1: String) {
+    companion object {
+        fun of(context: android.content.Context): AndroidClientIdentity? = runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+            val signer = info.signingInfo?.apkContentsSigners?.firstOrNull() ?: return@runCatching null
+            val digest = java.security.MessageDigest.getInstance("SHA-1").digest(signer.toByteArray())
+            AndroidClientIdentity(context.packageName, digest.joinToString("") { "%02X".format(it) })
+        }.getOrNull()
+    }
+}
+
+/**
  * Technical design v1.2 §6.2 and §6.4.
  *
  * Routing has a single rule: data tied to the signed-in account goes out with the bearer
  * token, everything else with the API key. The two are mutually exclusive — sending both on
  * one request makes the API ambiguous about which principal it is serving.
  */
-class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: TokenStore) {
+class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: TokenStore, private val androidIdentity: () -> AndroidClientIdentity? = { null }) {
     /** Legacy build-constant constructor; the runtime config path (v2.3 §22) passes a provider instead. */
     constructor(apiKey: String, tokens: TokenStore) : this({ apiKey }, tokens)
     private val apiKey get() = apiKeyProvider()
@@ -48,6 +64,9 @@ class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: T
             connectTimeout = 6000; readTimeout = 10000
             requestMethod = "GET"
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
+            if (auth == Auth.PUBLIC) androidIdentity()?.let { id ->
+                setRequestProperty("X-Android-Package", id.packageName); setRequestProperty("X-Android-Cert", id.sha1)
+            }
             setRequestProperty("Accept", "application/json")
         }
         try {
@@ -73,7 +92,7 @@ class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: T
         return when (reason) {
             "quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded" -> QuotaExceededException()
             "accessNotConfigured" -> ApiNotConfiguredException("Cloud 프로젝트에서 YouTube Data API v3를 사용 설정해 주세요")
-            "ipRefererBlocked" -> ApiNotConfiguredException("API 키 제한에 이 앱의 패키지명과 SHA-1이 등록되어 있는지 확인해 주세요")
+            "ipRefererBlocked", "androidPackageNameNotMatching", "forbidden" -> ApiNotConfiguredException("API 키 제한에 이 앱의 패키지명과 SHA-1이 등록되어 있는지 확인해 주세요")
             else -> AuthExpiredException()
         }
     }
