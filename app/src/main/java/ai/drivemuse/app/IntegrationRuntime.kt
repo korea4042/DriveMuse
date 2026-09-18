@@ -43,7 +43,9 @@ class IntegrationRuntime private constructor(context: Context) {
      */
     val spotifyAuth = SpotifyAuth(
         context.applicationContext,
-        clientId = { secret(ProviderId.SPOTIFY, "clientId") },
+        // A Client ID is not secret material, so it lives in the config row rather than the
+        // credential store — which only holds fields declared secret (§23).
+        clientId = { runBlocking { integrations.active(ProviderId.SPOTIFY).clientId } },
         readRefresh = { secret(ProviderId.SPOTIFY, "refreshToken") },
         writeRefresh = { value -> runBlocking { integrations.putSecret(ProviderId.SPOTIFY, "refreshToken", value) } }
     )
