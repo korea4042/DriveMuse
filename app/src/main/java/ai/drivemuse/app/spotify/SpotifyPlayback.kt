@@ -40,8 +40,10 @@ class SpotifyPlayback(private val api: SpotifyApi) {
         val results = runCatching { api.search("track:\"$cleanTitle\" artist:\"$artist\"", 10) }.getOrNull()
             ?.takeIf { it.isNotEmpty() }
             ?: runCatching { api.search("$cleanTitle $artist", 10) }.getOrNull().orEmpty()
-        return results.maxByOrNull { score(it, cleanTitle, artist, track.durationMs) }
-            ?.takeIf { score(it, cleanTitle, artist, track.durationMs) >= .55 }
+        // Track.durationMs is nullable in the domain; an unknown length just makes duration neutral.
+        val duration = track.durationMs ?: 0L
+        return results.maxByOrNull { score(it, cleanTitle, artist, duration) }
+            ?.takeIf { score(it, cleanTitle, artist, duration) >= .55 }
     }
 
     /** Title and artist agreement carry the match; duration only confirms it. */
