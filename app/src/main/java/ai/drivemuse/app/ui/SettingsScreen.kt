@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -199,11 +200,19 @@ import java.time.format.DateTimeFormatter
     TextButton(onClick = { open = !open }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (open) "$title 닫기" else "$title 보기") }
     if (open) content()
 }
-/** Which build is installed: version, commit and build time (§24 — plain text, no dev jargon). */
-@Composable fun BuildStamp() = Text(
-    "DriveMuse ${ai.drivemuse.app.BuildConfig.VERSION_NAME} (${ai.drivemuse.app.BuildConfig.VERSION_CODE}) · ${ai.drivemuse.app.BuildConfig.BUILD_COMMIT} · 빌드 ${ai.drivemuse.app.BuildConfig.BUILD_TIME}",
-    fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted,
-    modifier = Modifier.semantics { contentDescription = "설치된 앱 버전 ${ai.drivemuse.app.BuildConfig.VERSION_NAME}, 빌드 ${ai.drivemuse.app.BuildConfig.BUILD_TIME}" }
-)
+/**
+ * Which build is installed (§24 — plain text, no dev jargon). The install time comes from the
+ * package manager rather than a build constant, so it tells the user whether this APK is the one
+ * they just sideloaded without the build script having to stamp anything.
+ */
+@Composable fun BuildStamp() {
+    val context = LocalContext.current
+    val updatedAt = remember(context) {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime }.getOrNull()
+    }
+    val label = "DriveMuse ${BuildConfig.VERSION_NAME} (빌드 ${BuildConfig.VERSION_CODE})" + (updatedAt?.let { " · 설치 ${time(it)}" } ?: "")
+    Text(label, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted,
+        modifier = Modifier.semantics { contentDescription = "설치된 앱 " + label })
+}
 private fun time(ms: Long) = DateTimeFormatter.ofPattern("MM.dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(ms))
 @Composable fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateWithLifecycleCompat(): State<T> = collectAsStateWithLifecycle()
