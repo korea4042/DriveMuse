@@ -68,36 +68,50 @@ class MusicRepository(
      * Rebuilds the pool. Liked videos and subscriptions need the bearer token; the chart does
      * not, which is what keeps the app useful before the account is linked.
      */
-    suspend fun refresh(settings: Settings) {
+    /** What one pool rebuild actually managed to fetch, so a failure can be explained (§9). */
+    data class RefreshReport(val saved: Int, val top: Int, val artist: Int, val search: Int, val newRelease: Int, val error: String?) {
+        val total get() = saved + top + artist + search + newRelease
+        fun describe() = if (error != null) "불러오기 실패: $error"
+            else "저장 ${saved} · 자주 듣는 ${top} · 아티스트 ${artist} · 검색 ${search} · 신규 ${newRelease}"
+    }
+    @Volatile var lastReport: RefreshReport? = null
+        private set
+
+    suspend fun refresh(settings: Settings) { refreshReport(settings) }
+
+    suspend fun refreshReport(settings: Settings): RefreshReport {
         val now = System.currentTimeMillis()
         val rows = mutableListOf<CandidateEntity>()
+        var firstError: String? = null
+        fun note(e: Throwable) { if (firstError == null) firstError = e.message ?: e::class.simpleName }
 
         // Saved tracks and listening history are the account's own taste evidence (§17 KNOWN_PREFERENCE).
-        val saved = runCatching { spotify.savedTracks(50) }.getOrDefault(emptyList())
+        val saved = runCatching { spotify.savedTracks(50) }.onFailure(::note).getOrDefault(emptyList())
         rows += saved.map { row(it, familiar = true, affinity = .9, source = "saved", now = now) }
-        val top = runCatching { spotify.topTracks(limit = 50) }.getOrDefault(emptyList())
+        val top = runCatching { spotify.topTracks(limit = 50) }.onFailure(::note).getOrDefault(emptyList())
         rows += top.map { row(it, familiar = true, affinity = .85, source = "top", now = now) }
 
         val knownArtistIds = (saved + top).flatMap { it.artistIds }.toSet()
         val knownTrackIds = rows.map { it.videoId }.toSet()
 
         // Unheard tracks by artists the listener already has are the cheapest real discovery (§17 D01).
-        val seedArtists = runCatching { spotify.topArtistIds(limit = 10) }.getOrDefault(emptyList())
+        val seedArtists = runCatching { spotify.topArtistIds(limit = 10) }.onFailure(::note).getOrDefault(emptyList())
             .ifEmpty { knownArtistIds.take(10) }
         for (artistId in seedArtists.take(6)) {
-            val tracks = runCatching { spotify.artistTopTracks(artistId, settings.regionCode) }.getOrDefault(emptyList())
+            val tracks = runCatching { spotify.artistTopTracks(artistId, settings.regionCode) }.onFailure(::note).getOrDefault(emptyList())
             rows += tracks.filter { it.id !in knownTrackIds }
                 .map { row(it, familiar = false, affinity = .6, source = "artist_top", now = now) }
         }
+        val artistCount = rows.size - saved.size - top.size
 
         // A brand-new Spotify account has no library at all, so the pool has to start somewhere.
         if (rows.size < 20) {
             val seeds = lastSurveySeeds.ifEmpty { listOf("k-pop", "pop", "r&b", "hip hop", "indie rock") }
             for (phrase in seeds.take(5)) {
-                val found = runCatching { spotify.search(phrase, 20) }.getOrDefault(emptyList())
+                val found = runCatching { spotify.search(phrase, 20) }.onFailure(::note).getOrDefault(emptyList())
                 rows += found.map { row(it, familiar = false, affinity = .5, source = "search", now = now) }
             }
-            rows += runCatching { spotify.newReleaseTracks(settings.regionCode) }.getOrDefault(emptyList())
+            rows += runCatching { spotify.newReleaseTracks(settings.regionCode) }.onFailure(::note).getOrDefault(emptyList())
                 .map { row(it, familiar = false, affinity = .45, source = "new_release", now = now) }
         }
 
@@ -105,6 +119,11 @@ class MusicRepository(
             dao.putCandidates(rows.distinctBy { it.videoId })
             prefs.long("tasteSyncedAt", now)
         }
+        return RefreshReport(
+            saved = saved.size, top = top.size, artist = artistCount,
+            search = rows.count { it.source == "search" }, newRelease = rows.count { it.source == "new_release" },
+            error = if (rows.isEmpty()) (firstError ?: "Spotify가 곡을 돌려주지 않았어요") else null
+        ).also { lastReport = it }
     }
 
     /**

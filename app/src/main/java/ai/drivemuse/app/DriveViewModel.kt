@@ -127,10 +127,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun refreshPool() {
         viewModelScope.launch {
             val before = dao.candidateCount(0)
-            val outcome = runCatching { repository.refresh(settings.value) }
+            val outcome = runCatching { repository.refreshReport(settings.value) }
             val after = dao.candidateCount(0)
             poolMutable.value = outcome.fold(
-                onSuccess = { "후보 ${after}곡" + (if (after == before) " · 새로 추가된 곡 없음" else " · ${after - before}곡 추가") },
+                onSuccess = { "후보 ${after}곡 · " + it.describe() },
                 onFailure = { "후보 ${after}곡 · 불러오기 실패: " + (it.message ?: it::class.simpleName) }
             )
             message(poolMutable.value)
@@ -208,6 +208,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 }
                 val p=profile();val constraints=Constraints(excludedGenres=p.exclusions)
                 val prepared=TasteRanker.prepare(tracks,p,constraints,learning.scores(sessionId,System.currentTimeMillis())).filter { effective.energyCeiling>=1 || it.energy?.let { e -> e<=effective.energyCeiling }==true }.sortedByDescending { it.affinity-it.fatigue }.take(40)
+                if (prepared.isEmpty()) {
+                    val report = runCatching { repository.refreshReport(config) }.getOrNull()
+                    error("추천할 후보가 없어요 · " + (report?.describe() ?: "Spotify에서 곡을 가져오지 못했습니다"))
+                }
                 val fallback=SessionRanker.select(prepared,effective,progress)
                 val outcomes=intelligence.outcomes().filter { it.sessionId==sessionId }.sortedBy { it.createdAt }.map(learning::outcome)
                 val version=QueueVersion(sessionId,generation.toLong(),revision,contextVersion,outcomes.maxOfOrNull { it.version }?:0,UUID.randomUUID().toString())
