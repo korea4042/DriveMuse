@@ -1,0 +1,20 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <queries><package android:name="com.google.android.apps.youtube.music"/></queries>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <application android:name=".DriveApplication" android:label="DriveMuse" android:theme="@style/AppTheme" android:icon="@drawable/ic_drivemuse" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
+        <receiver android:name=".VehicleReceiver" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.bluetooth.device.action.ACL_CONNECTED"/><action android:name="android.bluetooth.device.action.ACL_DISCONNECTED"/></intent-filter>
+        </receiver>
+    <service android:name=".playback.MediaObservationService" android:label="DriveMuse 재생 연동 진단" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" android:exported="true">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
+        </service>
+    </application>
+</manifest>
