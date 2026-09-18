@@ -58,6 +58,7 @@ import java.time.format.DateTimeFormatter
         }
         Text("데모 모드·차량 알림·권한은 각 상세 화면에서 바꿀 수 있어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
         Spacer(Modifier.height(4.dp)); TextButton(onClick = onRequestBluetooth, modifier = Modifier.heightIn(min = 48.dp)) { Text("권한 다시 요청") }
+        BuildStamp()
     }
 }
 
@@ -198,5 +199,11 @@ import java.time.format.DateTimeFormatter
     TextButton(onClick = { open = !open }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (open) "$title 닫기" else "$title 보기") }
     if (open) content()
 }
+/** Which build is installed: version, commit and build time (§24 — plain text, no dev jargon). */
+@Composable fun BuildStamp() = Text(
+    "DriveMuse ${ai.drivemuse.app.BuildConfig.VERSION_NAME} (${ai.drivemuse.app.BuildConfig.VERSION_CODE}) · ${ai.drivemuse.app.BuildConfig.BUILD_COMMIT} · 빌드 ${ai.drivemuse.app.BuildConfig.BUILD_TIME}",
+    fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted,
+    modifier = Modifier.semantics { contentDescription = "설치된 앱 버전 ${ai.drivemuse.app.BuildConfig.VERSION_NAME}, 빌드 ${ai.drivemuse.app.BuildConfig.BUILD_TIME}" }
+)
 private fun time(ms: Long) = DateTimeFormatter.ofPattern("MM.dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(ms))
 @Composable fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateWithLifecycleCompat(): State<T> = collectAsStateWithLifecycle()
