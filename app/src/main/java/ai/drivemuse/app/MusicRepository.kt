@@ -1,6 +1,7 @@
 package ai.drivemuse.app
 
 import ai.drivemuse.domain.*
+import ai.drivemuse.app.spotify.SpotifyIds
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -18,10 +19,13 @@ class MusicRepository(
     private val prefs: Preferences
 ) {
     private val seedMutex=Mutex()
+    /** Survey phrases kept from the last seeding pass, so a thin pool can reuse them. */
+    @Volatile private var lastSurveySeeds: List<String> = emptyList()
     suspend fun addSurveyCandidates(answers: List<SurveyAnswer>) = seedMutex.withLock {
         val phrases=answers.filter { it.status==AnswerStatus.ANSWERED }.sortedByDescending { it.question.id=="Q7" }.flatMap { a ->
             if(a.freeText.isNotBlank()) listOf(a.freeText.take(120)) else if(a.question.intent==Intent.PREFERENCE) a.question.options.filter { it.id in a.selected }.map { it.label+" music" } else emptyList()
         }.distinct().take(3)
+        lastSurveySeeds = phrases
         for(phrase in phrases) {
             val now=System.currentTimeMillis();val today=now/86400000;val s=prefs.flow.first();val used=if(s.quotaDay==today) s.searchCalls else 0
             if(!Quota.canSearch(used)) break
@@ -44,6 +48,9 @@ class MusicRepository(
         val now = System.currentTimeMillis()
         dao.pruneCandidates(now - poolTtl)
         dao.prunePlayed(now - fatigueWindow)
+        // One-time cleanup: rows keyed by a YouTube video id can never be played through Spotify.
+        val legacy = dao.candidates(0).filterNot { SpotifyIds.isTrackId(it.videoId) }
+        if (legacy.isNotEmpty()) dao.deleteCandidates(legacy.map { it.videoId })
 
         // §27: rows stored before the form filter existed are still in the pool, so the filter runs
         // at read time too. Pool health counts only rows that can actually be recommended.
@@ -83,6 +90,17 @@ class MusicRepository(
                 .map { row(it, familiar = false, affinity = .6, source = "artist_top", now = now) }
         }
 
+        // A brand-new Spotify account has no library at all, so the pool has to start somewhere.
+        if (rows.size < 20) {
+            val seeds = lastSurveySeeds.ifEmpty { listOf("k-pop", "pop", "r&b", "hip hop", "indie rock") }
+            for (phrase in seeds.take(5)) {
+                val found = runCatching { spotify.search(phrase, 20) }.getOrDefault(emptyList())
+                rows += found.map { row(it, familiar = false, affinity = .5, source = "search", now = now) }
+            }
+            rows += runCatching { spotify.newReleaseTracks(settings.regionCode) }.getOrDefault(emptyList())
+                .map { row(it, familiar = false, affinity = .45, source = "new_release", now = now) }
+        }
+
         if (rows.isNotEmpty()) {
             dao.putCandidates(rows.distinctBy { it.videoId })
             prefs.long("tasteSyncedAt", now)
@@ -93,7 +111,7 @@ class MusicRepository(
      * Spotify serves recordings, not uploads, so there is no stage cut or music video to filter out.
      * The filter stays for rows the YouTube-era pool left behind, which are dropped on sight.
      */
-    private fun usable(rows: List<CandidateEntity>) = rows.filterNot { VideoForm.isBroadcastOrStage(it.title, it.artist) }
+    private fun usable(rows: List<CandidateEntity>) = rows.filter { SpotifyIds.isTrackId(it.videoId) }
 
     private fun row(t: ai.drivemuse.app.spotify.SpotifyTrack, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(
         videoId = t.id, title = t.name, artist = t.artists.joinToString(", "),

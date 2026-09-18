@@ -228,13 +228,13 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
 
     /** §30: play the exact recording through App Remote and queue the rest of the batch. */
     fun handoff(track: Track?) {
-        suspendAgent()
         if (track == null) { message("재생할 곡이 없습니다"); return }
+        if (!ai.drivemuse.app.spotify.SpotifyIds.isTrackId(track.id)) { message("예전 목록의 곡이에요. 설정에서 후보를 새로 불러와 주세요"); return }
         if (!Constraints(excludedGenres = profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다"); return }
         viewModelScope.launch {
             val failure = runtime.spotifyRemote.connect(getApplication())
             if (failure != null) { message(failure); return@launch }
-            if (!runtime.spotifyRemote.play(track.id)) { message("Spotify 재생을 시작하지 못했어요"); return@launch }
+            if (!runtime.spotifyRemote.play(track.id)) { message("Spotify 앱이 응답하지 않아요. Spotify에서 한 번 재생한 뒤 다시 시도해 주세요"); return@launch }
             message("${track.artist} ${track.title} 재생 중")
             // Exposure only (§17 EXPOSED_ONLY); a listening outcome needs observed playback.
             if (!ui.value.demo) {

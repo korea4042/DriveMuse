@@ -103,6 +103,7 @@ class Preferences(private val context: Context) {
     @Query("SELECT COUNT(*) FROM candidates WHERE fetchedAt >= :cutoff") suspend fun candidateCount(cutoff: Long): Int
     @Query("DELETE FROM candidates WHERE fetchedAt < :cutoff") suspend fun pruneCandidates(cutoff: Long)
     @Query("DELETE FROM candidates") suspend fun clearCandidates()
+    @Query("DELETE FROM candidates WHERE videoId IN (:ids)") suspend fun deleteCandidates(ids: List<String>)
 
     @Insert suspend fun putPlayed(row: PlayedEntity)
     @Query("SELECT videoId FROM played WHERE playedAt >= :since") suspend fun playedSince(since: Long): List<String>

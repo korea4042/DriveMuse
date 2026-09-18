@@ -121,7 +121,7 @@ import java.time.format.DateTimeFormatter
             Text("추천한 곡은 Spotify에서 재생됩니다. 첫 곡을 누르면 나머지 추천도 큐에 들어갑니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
         }
         GlassSurface {
-            Text(if (hasMediaId) "청취 상태를 확인하고 있어요" else "아직 청취 상태를 확인할 수 없어요", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text(if (hasMediaId) "청취 상태를 확인하고 있어요" else "Spotify 재생 상태를 직접 받습니다", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             Text("청취 상태 접근을 허용하면 어떤 곡이 얼마나 재생됐는지 확인해 학습에 쓸 수 있어요. 허용해도 자동 전환은 켜지지 않습니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             DriveButton("청취 상태 접근 허용") { onOpenNotificationSettings() }
             Expander("개발 진단") { Text("재생 연동 수준 L0 · 열기 전용 / 관측 상태 $diagnosticState / 곡 ID 제공 $hasMediaId / 재생 위치 ${positionMs?.let { "${it}ms" } ?: "미상"}", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }

@@ -9,6 +9,12 @@ import java.net.URL
 import java.net.URLEncoder
 import javax.net.ssl.HttpsURLConnection
 
+/** A Spotify track id is 22 base62 characters; anything else is a leftover from the YouTube pool. */
+object SpotifyIds {
+    private val shape = Regex("[A-Za-z0-9]{22}")
+    fun isTrackId(value: String) = shape.matches(value)
+}
+
 /** Premium is required for playback control; the Web API says so with 403 PREMIUM_REQUIRED. */
 class SpotifyPremiumRequired : IllegalStateException("Spotify Premium 계정에서만 재생을 제어할 수 있어요")
 class SpotifyNoActiveDevice : IllegalStateException("재생할 기기를 찾지 못했어요. Spotify 앱을 먼저 실행해 주세요")
@@ -104,6 +110,19 @@ class SpotifyApi(private val auth: SpotifyAuth) {
 
     suspend fun artistTopTracks(artistId: String, market: String = "KR"): List<SpotifyTrack> =
         request("GET", "artists/$artistId/top-tracks", mapOf("market" to market))?.optJSONArray("tracks").toTracks()
+
+    /** Fresh accounts have no library, so the pool starts from new releases and survey searches. */
+    suspend fun newReleaseTracks(market: String = "KR", albums: Int = 10): List<SpotifyTrack> {
+        val ids = request("GET", "browse/new-releases", mapOf("country" to market, "limit" to albums.coerceIn(1, 50).toString()))
+            ?.optJSONObject("albums")?.optJSONArray("items")
+            ?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("id")?.takeIf { id -> id.isNotBlank() } } }
+            .orEmpty()
+        return ids.take(albums).flatMap { albumId ->
+            request("GET", "albums/$albumId/tracks", mapOf("limit" to "5"))?.optJSONArray("items")
+                ?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("id")?.takeIf { id -> id.isNotBlank() } } }
+                .orEmpty()
+        }.let { if (it.isEmpty()) emptyList() else tracks(it) }
+    }
 
     suspend fun tracks(ids: List<String>): List<SpotifyTrack> = ids.distinct().chunked(50).flatMap { chunk ->
         request("GET", "tracks", mapOf("ids" to chunk.joinToString(",")))?.optJSONArray("tracks").toTracks()
