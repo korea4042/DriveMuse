@@ -59,6 +59,7 @@ import java.time.format.DateTimeFormatter
         }
         Text("데모 모드·차량 알림·권한은 각 상세 화면에서 바꿀 수 있어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
         Spacer(Modifier.height(4.dp)); TextButton(onClick = onRequestBluetooth, modifier = Modifier.heightIn(min = 48.dp)) { Text("권한 다시 요청") }
+        UpdateRow()
         BuildStamp()
     }
 }
@@ -216,6 +217,22 @@ import java.time.format.DateTimeFormatter
     TextButton(onClick = { open = !open }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (open) "$title 닫기" else "$title 보기") }
     if (open) content()
 }
+/** Offers the newer build when CI has published one; installing stays a user action. */
+@Composable fun UpdateRow() {
+    val context = LocalContext.current
+    var info by remember { mutableStateOf<UpdateInfo?>(null) }
+    var checked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { info = runCatching { UpdateChecker.check() }.getOrNull(); checked = true }
+    val update = info
+    if (update != null) GlassSurface {
+        Text("새 버전 ${update.versionName}이 있어요", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+        Text("설치된 버전은 ${update.installedVersionName}입니다. 내려받아 덮어쓰기로 설치하세요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        DriveButton("새 버전 내려받기") {
+            runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(update.downloadUrl))) }
+        }
+    } else if (checked) Text("최신 버전을 사용 중이에요", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+}
+
 /**
  * Which build is installed (§24 — plain text, no dev jargon). The install time comes from the
  * package manager rather than a build constant, so it tells the user whether this APK is the one
