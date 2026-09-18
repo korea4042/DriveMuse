@@ -173,8 +173,8 @@ class MainActivity: ComponentActivity() {
         Text("Google 계정 연결",fontSize=20.sp,fontWeight=FontWeight.SemiBold)
         Text(if(settings.accountLinked) "좋아요와 구독을 읽어 취향을 만듭니다. 읽기 전용이라 재생목록을 바꾸지 않아요." else "연결하지 않아도 인기 음악으로 선곡할 수 있어요. 연결하면 내 취향을 반영합니다.",color=DriveColors.Muted,fontSize=12.sp,lineHeight=20.sp)
         ContextPill(if(settings.accountLinked) "연결됨 · youtube.readonly" else "미연결")
-        if(!vm.apiKeyConfigured) Text("빌드에 YouTube API 키가 없습니다. gradle.properties의 ytApiKey를 설정한 뒤 다시 빌드해 주세요.",color=Color(0xFFF6C85F),fontSize=12.sp,lineHeight=20.sp)
-        if(!settings.accountLinked) DriveButton("Google 계정으로 연결",vm.apiKeyConfigured) { vm.linkAccount() }
+        if(!vm.youtubeUsable) Text("Google 계정을 연결하거나 설정에서 YouTube Data API 키를 입력해 주세요.",color=Color(0xFFF6C85F),fontSize=12.sp,lineHeight=20.sp)
+        if(!settings.accountLinked) DriveButton("Google 계정으로 연결",true) { vm.linkAccount() }
         else TextButton(onClick={ vm.linkAccount() },modifier=Modifier.fillMaxWidth()) { Text("취향 다시 불러오기") }
         Text("Google 비밀번호와 쿠키는 받지 않습니다. 인증은 Google 화면에서만 진행돼요.",fontSize=11.sp,color=DriveColors.Muted,lineHeight=18.sp)
         if(settings.searchCalls>0) Text("오늘 남은 음악 검색 ${Quota.remainingSearches(settings.searchCalls)}회",fontSize=11.sp,color=DriveColors.Muted)

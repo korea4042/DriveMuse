@@ -72,6 +72,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private var selectionGeneration = 0
     /** Live check against the runtime config (T14: no rebuild needed after entering a key). */
     val apiKeyConfigured get() = runtime.secret(ProviderId.YOUTUBE, "apiKey")?.isNotBlank() == true
+    /** §22: a linked Google account authorizes public reads, so either path is enough to query YouTube. */
+    val youtubeUsable get() = apiKeyConfigured || settings.value.accountLinked
 
     init {
         viewModelScope.launch {
@@ -195,7 +197,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val ruleSnapshot = dao.rules().first().map { it.domain() }
                 val effective = RuleEngine.resolve(ruleSnapshot,snapshot.context,config.ratio.toDouble())
                 val tracks = if(snapshot.demo) DemoTracks else {
-                    check(apiKeyConfigured) { "설정에서 YouTube Data API 키를 입력해 주세요" }
+                    check(youtubeUsable) { "설정에서 Google 계정을 연결하거나 YouTube Data API 키를 입력해 주세요" }
                     // A silent token top-up: the linked account may simply have an expired token.
                     if (config.accountLinked && tokens.current() == null) linkAccountSilently()
                     if(seedRevision!=revision) {
@@ -245,7 +247,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         else -> "연결할 수 없습니다. 기존 음악은 그대로 유지합니다"
     }
     private fun connectionLabel(s: Settings) = when {
-        !apiKeyConfigured -> "API 키 미설정"
+        !apiKeyConfigured && !s.accountLinked -> "연결 필요 · 계정 또는 API 키"
         s.accountLinked -> "Google 계정 연결됨 · 읽기 전용"
         else -> "계정 미연결 · 인기 음악만 사용"
     }

@@ -53,18 +53,21 @@ class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: T
     private val base = "https://www.googleapis.com/youtube/v3/"
 
     private suspend fun get(path: String, params: Map<String, String>, auth: Auth): JSONObject = withContext(Dispatchers.IO) {
-        val token = if (auth == Auth.USER) tokens.current() ?: throw UserAuthRequiredException() else null
-        if (auth == Auth.PUBLIC && apiKey.isBlank()) throw ApiNotConfiguredException("API 키가 설정되지 않았습니다")
-
-        // The key and the bearer token are mutually exclusive: never both on one request.
-        val pairs = params.toList() + if (auth == Auth.PUBLIC) listOf("key" to apiKey) else emptyList()
+        // §22: an account token authorizes public reads too, so a linked account removes the need for a key.
+        // The key and the bearer token stay mutually exclusive on one request.
+        val token = when (auth) {
+            Auth.USER -> tokens.current() ?: throw UserAuthRequiredException()
+            Auth.PUBLIC -> tokens.current()
+        }
+        if (auth == Auth.PUBLIC && token == null && apiKey.isBlank()) throw ApiNotConfiguredException("Google 계정을 연결하거나 YouTube Data API 키를 입력해 주세요")
+        val pairs = params.toList() + if (auth == Auth.PUBLIC && token == null) listOf("key" to apiKey) else emptyList()
         val query = pairs.joinToString("&") { (k, v) -> k + "=" + URLEncoder.encode(v, "UTF-8") }
         val connection = (URL(base + path + "?" + query).openConnection() as HttpsURLConnection).apply {
             instanceFollowRedirects = false
             connectTimeout = 6000; readTimeout = 10000
             requestMethod = "GET"
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
-            if (auth == Auth.PUBLIC) androidIdentity()?.let { id ->
+            if (auth == Auth.PUBLIC && token == null) androidIdentity()?.let { id ->
                 setRequestProperty("X-Android-Package", id.packageName); setRequestProperty("X-Android-Cert", id.sha1)
             }
             setRequestProperty("Accept", "application/json")
@@ -76,7 +79,8 @@ class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: T
                     check(bytes.size <= 2_000_000) { "응답 크기 초과" }
                     JSONObject(String(bytes, Charsets.UTF_8))
                 }
-                401 -> { tokens.clear(); throw AuthExpiredException() }
+                // A stale token must not strand a public read when a key is still configured.
+                401 -> { tokens.clear(); if (auth == Auth.PUBLIC && token != null && apiKey.isNotBlank()) return@withContext get(path, params, auth) else throw AuthExpiredException() }
                 403 -> throw classify403(connection)
                 else -> throw IllegalStateException("음악 정보를 불러오지 못했습니다 ($code)")
             }

@@ -44,7 +44,7 @@ import java.time.format.DateTimeFormatter
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("나에게 맞게.", "상태를 보고, 필요한 것만 바꾸세요")
         GlassSurface {
-            SummaryRow(Icons.Outlined.MusicNote, "음악 서비스", if (yt.ready || vm.apiKeyConfigured) (if (settings.accountLinked) "연결됨 · Google 계정 읽기 전용" else "연결됨 · 인기 음악과 검색") else "미연결", if (yt.ready || vm.apiKeyConfigured) null else "설정 필요") { onOpen("설정/음악 서비스") }
+            SummaryRow(Icons.Outlined.MusicNote, "음악 서비스", if (yt.ready || vm.youtubeUsable) (if (settings.accountLinked) "연결됨 · Google 계정 읽기 전용" else "연결됨 · 인기 음악과 검색") else "미연결", if (yt.ready || vm.youtubeUsable) null else "설정 필요") { onOpen("설정/음악 서비스") }
             SummaryRow(Icons.Outlined.PlayCircle, "재생과 청취 학습", if (observationAvailable) "음악 앱에서 재생할 수 있어요 · 청취 상태 확인 중" else "음악 앱에서 재생할 수 있어요 · 자동 학습 꺼짐", null) { onOpen("설정/재생") }
             SummaryRow(Icons.Outlined.AutoAwesome, "AI 추천", when { !aiReady -> "설정 필요"; IntegrationPolicy.effectiveEnabled(aiConsent, aiReady) -> "사용 중"; else -> "꺼짐" }, if (!aiReady) "설정 필요" else null) { onOpen("설정/AI") }
             SummaryRow(Icons.Outlined.WbSunny, "위치와 날씨", weatherLabel, if (!vm.weatherConfigured) "날씨 설정 필요" else null) { onOpen("설정/위치") }
@@ -66,7 +66,7 @@ import java.time.format.DateTimeFormatter
     val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("음악 서비스", "곡 정보를 어디서 가져올지 정합니다")
-        IntegrationCard(cvm, ProviderId.YOUTUBE, integrations.getValue(ProviderId.YOUTUBE), busy == ProviderId.YOUTUBE, driving, "공개 조회에 필요한 키입니다. Google Cloud 콘솔에서 Android 앱 패키지·서명으로 제한하는 것을 권장해요.")
+        IntegrationCard(cvm, ProviderId.YOUTUBE, integrations.getValue(ProviderId.YOUTUBE), busy == ProviderId.YOUTUBE, driving, "Google 계정을 연결하면 키 없이도 조회할 수 있어요. 계정 없이 쓰려면 키를 넣고, Cloud 콘솔에서 Android 앱 패키지·서명으로 제한하는 것을 권장해요.")
         GlassSurface {
             SectionTitle("Google 계정")
             Text(if (settings.accountLinked) "연결됨 · 읽기 전용" else "미연결", fontSize = 16.sp, lineHeight = 24.sp)

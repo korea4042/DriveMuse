@@ -113,7 +113,9 @@ class IntegrationConfigRepository(private val db: DriveDatabase, private val cre
 /** Minimal live probes per provider (§22: format alone is never "connected"). Each is one small read. */
 object Probes {
     fun youtube(api: (String) -> ai.drivemuse.app.YouTubeApi): suspend (Map<String, String>) -> ProbeResult = { v ->
-        try { api(v.getValue("apiKey")).popularMusic("KR"); ProbeResult(true) }
+        try { api(v["apiKey"].orEmpty()).popularMusic("KR"); ProbeResult(true) }
+        catch (e: ai.drivemuse.app.UserAuthRequiredException) { ProbeResult(false, IntegrationError.PERMISSION, e.message ?: "") }
+        catch (e: ai.drivemuse.app.ApiNotConfiguredException) { ProbeResult(false, IntegrationError.API_NOT_ENABLED, e.message ?: "") }
         catch (e: ai.drivemuse.app.QuotaExceededException) { ProbeResult(false, IntegrationError.QUOTA) }
         catch (e: IllegalStateException) { ProbeResult(false, when { "API" in (e.message ?: "") && "사용" in (e.message ?: "") -> IntegrationError.API_NOT_ENABLED; "제한" in (e.message ?: "") -> IntegrationError.KEY_RESTRICTED; "403" in (e.message ?: "") -> IntegrationError.PERMISSION; else -> IntegrationError.NETWORK }, e.message ?: "") }
     }

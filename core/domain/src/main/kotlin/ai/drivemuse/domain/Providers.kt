@@ -16,7 +16,8 @@ data class CredentialField(val key: String, val label: String, val secret: Boole
 /** §22 table: exactly the fields each provider needs. No Client Secret field exists in the base scope. */
 object ProviderRequirements {
     fun fields(p: ProviderId): List<CredentialField> = when (p) {
-        ProviderId.YOUTUBE -> listOf(CredentialField("apiKey", "YouTube Data API 키", true, true))
+        // §22: a linked Google account already authorizes public reads, so the key is a fallback for signed-out use.
+        ProviderId.YOUTUBE -> listOf(CredentialField("apiKey", "YouTube Data API 키 (계정 연결 시 생략 가능)", true, false))
         ProviderId.MUSICBRAINZ -> emptyList()
         ProviderId.LASTFM -> listOf(CredentialField("apiKey", "Last.fm API 키", true, true))
         ProviderId.LISTENBRAINZ -> listOf(CredentialField("userName", "ListenBrainz 사용자명 (선택)", false, false), CredentialField("token", "ListenBrainz 토큰 (개인 기능에만)", true, false))
