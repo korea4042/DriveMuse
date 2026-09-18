@@ -62,7 +62,20 @@ class SpotifyApi(private val auth: SpotifyAuth) {
                     val bytes = c.inputStream.use { it.readNBytes(2_000_001) }
                     if (bytes.isEmpty()) null else JSONObject(String(bytes, Charsets.UTF_8))
                 }
-                400 -> throw SpotifyUnavailable(reason(c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty(), 400, where))
+                400 -> {
+                    val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()
+                    // A documented-valid limit of 20 is being refused with "Invalid limit". Spotify has
+                    // tightened limits for newer apps without saying so in the error, so step the limit
+                    // down and finally drop it rather than fail the whole pool on one parameter.
+                    val current = params["limit"]?.toIntOrNull()
+                    if ("invalid limit" in detail.lowercase() && current != null) {
+                        val next = when { current > 10 -> 10; current > 5 -> 5; current > 1 -> 1; else -> null }
+                        c.disconnect()
+                        val reduced = if (next == null) params - "limit" else params + ("limit" to next.toString())
+                        return@withContext request(method, path, reduced, body, retry)
+                    }
+                    throw SpotifyUnavailable(reason(detail, 400, where))
+                }
                 401 -> throw SpotifyAuthRequired()
                 403 -> {
                     val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()

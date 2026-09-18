@@ -5,7 +5,7 @@ android {
     namespace = "ai.drivemuse.app"
     compileSdk = 36
     defaultConfig {
-        applicationId = "ai.drivemuse.app"; minSdk = 33; targetSdk = 35; versionCode = 22; versionName = "0.8.3"
+        applicationId = "ai.drivemuse.app"; minSdk = 33; targetSdk = 35; versionCode = 23; versionName = "0.8.4"
         buildConfigField("String", "YT_API_KEY", quoted(providers.gradleProperty("ytApiKey").orNull ?: ""))
         buildConfigField("String", "GEMINI_MODEL", quoted(providers.gradleProperty("geminiModel").orNull ?: ""))
         buildConfigField("String", "WEATHER_API_KEY", quoted(providers.gradleProperty("weatherApiKey").orNull ?: ""))
