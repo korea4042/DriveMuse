@@ -201,3 +201,11 @@ class VideoFormTest {
         assertTrue(topic > audio && audio > mv && mv > plain)
     }
 }
+
+class RankPenaltyTest {
+    @Test fun audioUploadsOutrankMusicVideos() {
+        assertEquals(0.0, VideoForm.rankPenalty("곡 (Official Audio)", "아티스트"))
+        assertEquals(0.0, VideoForm.rankPenalty("곡", "아티스트 - Topic"))
+        assertTrue(VideoForm.rankPenalty("곡 (Official M/V)", "아티스트") > VideoForm.rankPenalty("곡 (Lyric Video)", "아티스트"))
+    }
+}

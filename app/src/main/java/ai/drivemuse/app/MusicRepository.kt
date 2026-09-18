@@ -44,14 +44,16 @@ class MusicRepository(
         dao.pruneCandidates(now - poolTtl)
         dao.prunePlayed(now - fatigueWindow)
 
+        // §27: rows stored before the form filter existed are still in the pool, so the filter runs
+        // at read time too. Pool health counts only rows that can actually be recommended.
         val stale = now - settings.tasteSyncedAt > syncInterval
-        if (stale || dao.candidateCount(now - poolTtl) < minimumPool) {
+        if (stale || usable(dao.candidates(now - poolTtl)).size < minimumPool) {
             runCatching { refresh(settings) }.onFailure { error ->
                 // A failed refresh must never empty the queue. §6.8
-                if (dao.candidateCount(now - poolTtl) == 0) throw error
+                if (usable(dao.candidates(now - poolTtl)).isEmpty()) throw error
             }
         }
-        return toTracks(dao.candidates(now - poolTtl), context, now)
+        return toTracks(usable(dao.candidates(now - poolTtl)), context, now)
     }
 
     /**
@@ -106,6 +108,8 @@ class MusicRepository(
         !VideoForm.isBroadcastOrStage(v.title, v.channel)
     /** Among surviving refs, prefer the audio upload over an MV over anything unlabelled (§30). */
     private fun preferAudio(rows: List<RawVideo>) = rows.sortedByDescending { VideoForm.audioPreference(it.title, it.channel) }
+    /** The same filter applied to stored rows, so an older pool cannot keep serving stage cuts. */
+    private fun usable(rows: List<CandidateEntity>) = rows.filterNot { VideoForm.isBroadcastOrStage(it.title, it.artist) }
 
     private fun row(v: RawVideo, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(
         videoId = v.id,
@@ -130,7 +134,9 @@ class MusicRepository(
         return rows.map { row ->
             Track(
                 id = row.videoId, title = row.title, artist = row.artist,
-                familiar = row.familiar, energy = row.energy, affinity = row.affinity,
+                familiar = row.familiar, energy = row.energy,
+                // A music video ranks below the audio upload of the same song (§30).
+                affinity = (row.affinity - VideoForm.rankPenalty(row.title, row.artist)).coerceIn(0.0, 1.0),
                 // Unknown energy sits at neutral rather than being guessed toward the target.
                 contextFit = row.energy?.let { 1.0 - kotlin.math.abs(it - targetEnergy) } ?: .5,
                 freshness = row.freshness,

@@ -207,6 +207,18 @@ object VideoForm {
      * Preference among refs that survive the filter, highest first. An auto-generated "- Topic"
      * channel is YouTube's own audio upload, so it outranks a title that merely says "official".
      */
+    /**
+     * How much to hold a ref back when it is playable but not the plain audio rendition. A music
+     * video still carries the recording, so it is ranked below an audio upload rather than dropped —
+     * dropping it would leave songs that only exist as an MV unreachable.
+     */
+    fun rankPenalty(title: String, channel: String): Double = when (audioPreference(title, channel)) {
+        4, 3 -> 0.0
+        1 -> .10   // lyric video: audio is intact, visuals are not the point
+        2 -> .18   // official MV
+        else -> .12   // unlabelled upload: form unknown
+    }
+
     fun audioPreference(title: String, channel: String): Int = when {
         channel.trimEnd().endsWith("- Topic") -> 4
         Regex("official audio|\\baudio\\b|음원", RegexOption.IGNORE_CASE).containsMatchIn(title) -> 3
