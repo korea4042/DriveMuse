@@ -1,57 +1,6 @@
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/DriveViewModel.kt:266:54 Unresolved reference 'play'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/DriveViewModel.kt:269:21 Not enough information to infer type argument for 'K'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/DriveViewModel.kt:269:76 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/DriveViewModel.kt:269:76 Not enough information to infer type argument for 'R'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/DriveViewModel.kt:269:114 Unresolved reference 'queue'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/IntegrationRuntime.kt:54:43 Argument type mismatch: actual type is 'SpotifyApi', but 'String?' was expected.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/IntegrationRuntime.kt:54:43 No value passed for parameter 'playing'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/IntegrationRuntime.kt:54:43 No value passed for parameter 'positionMs'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/IntegrationRuntime.kt:54:43 No value passed for parameter 'durationMs'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/IntegrationRuntime.kt:54:43 No value passed for parameter 'deviceId'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/IntegrationRuntime.kt:54:43 No value passed for parameter 'deviceName'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/IntegrationRuntime.kt:54:43 No value passed for parameter 'observedAt'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyApi.kt:27:12 Redeclaration:
-class SpotifyPlayback : Any
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:14:7 Redeclaration:
-data class SpotifyPlayback : Any
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:17:21 Unresolved reference 'resolve'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:19:13 Unresolved reference 'api'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:31:25 Unresolved reference 'resolve'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:32:13 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:32:27 Unresolved reference 'api'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:32:49 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:32:49 Not enough information to infer type argument for 'T'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:32:59 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:39:26 Unresolved reference 'clean'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:40:23 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:40:23 Argument type mismatch: actual type is 'T? (of fun <T> T.takeIf)', but 'K? (of fun <K> ELVIS_CALL)' was expected.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:40:37 Unresolved reference 'api'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:41:15 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:41:15 Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
-fun <T> T.takeIf(predicate: (T) -> Boolean): T?
-    [R|Contract description]
---
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:41:22 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:42:16 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:42:16 Argument type mismatch: actual type is 'String', but 'K (of fun <K> ELVIS_CALL)' was expected.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:42:30 Unresolved reference 'api'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:43:38 Unresolved reference 'score'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:43:44 Unresolved reference 'it'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:44:15 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:44:15 Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
-fun <T> T.takeIf(predicate: (T) -> Boolean): T?
-    [R|Contract description]
---
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:44:22 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:44:24 Unresolved reference 'score'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:49:17 Unresolved reference 'similarity'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:49:28 Unresolved reference 'clean'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:50:65 Overload resolution ambiguity between candidates:
-fun <T> Iterable<T>.maxOfOrNull(selector: (T) -> Double): Double?
-fun <T> Iterable<T>.maxOfOrNull(selector: (T) -> Float): Float?
---
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:50:79 Unresolved reference 'similarity'.
-gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_4-1789750179073.json
+e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:43:68 Argument type mismatch: actual type is 'Long?', but 'Long' was expected.
+e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/spotify/SpotifyPlayback.kt:44:54 Argument type mismatch: actual type is 'Long?', but 'Long' was expected.
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_4-1789750365161.json
 
 FAILURE: Build failed with an exception.
 
