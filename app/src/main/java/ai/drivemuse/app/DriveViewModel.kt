@@ -33,13 +33,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val dao=db.dao()
     private val intelligence=db.intelligence()
     private val surveyStore=SurveyStore(db)
-    private val gateway=RoleGateway(application,intelligence)
+    private val runtime = IntegrationRuntime.get(application)
+    private val gateway=RoleGateway(application,intelligence) { runtime.secret(ProviderId.FIREBASE_AI,"modelId") ?: "" }
     private val engine=RecommendationEngine(gateway)
     private val coordinator=QueueCoordinator(db)
     private val playback=YouTubeMusicAdapter(application)
     private val learning=LearningStore(db)
     private val location=LocationAdapter(application)
-    private val weather=WeatherRepository()
+    private val weather=WeatherRepository { runtime.secret(ProviderId.WEATHER,"apiKey") ?: "" }
     private var region: Region?=null
     private var weatherFact: WeatherFact?=null
     private var contextVersion=0L
@@ -55,11 +56,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val edits=Channel<suspend ()->Unit>(Channel.UNLIMITED)
     private var surveyJob: Job?=null
     val aiConfigured get()=gateway.configured
-    val weatherConfigured get()=BuildConfig.WEATHER_API_KEY.isNotBlank()
+    val weatherConfigured get()=weather.configured
     val analysis=intelligence.observeState("survey_analysis").stateIn(viewModelScope,SharingStarted.Eagerly,null)
-    private val tokens = TokenStore()
+    private val tokens = runtime.tokens
     private val auth = YouTubeAuth(application)
-    private val api = YouTubeApi(BuildConfig.YT_API_KEY, tokens)
+    private val api = runtime.youtube   // v2.3 §22: key comes from the encrypted runtime config, BuildConfig only as default
     private val repository = MusicRepository(api, dao, prefs)
     val settings = prefs.flow.stateIn(viewModelScope,SharingStarted.Eagerly,Settings())
     val rules = dao.rules().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
@@ -69,7 +70,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private var selectionJob: Job? = null
     private var accountJob: Job? = null
     private var selectionGeneration = 0
-    val apiKeyConfigured = BuildConfig.YT_API_KEY.isNotBlank()
+    /** Live check against the runtime config (T14: no rebuild needed after entering a key). */
+    val apiKeyConfigured get() = runtime.secret(ProviderId.YOUTUBE, "apiKey")?.isNotBlank() == true
 
     init {
         viewModelScope.launch {
@@ -193,7 +195,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val ruleSnapshot = dao.rules().first().map { it.domain() }
                 val effective = RuleEngine.resolve(ruleSnapshot,snapshot.context,config.ratio.toDouble())
                 val tracks = if(snapshot.demo) DemoTracks else {
-                    check(apiKeyConfigured) { "YouTube API 키가 빌드에 포함되지 않았습니다" }
+                    check(apiKeyConfigured) { "설정에서 YouTube Data API 키를 입력해 주세요" }
                     // A silent token top-up: the linked account may simply have an expired token.
                     if (config.accountLinked && tokens.current() == null) linkAccountSilently()
                     if(seedRevision!=revision) {
@@ -211,14 +213,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val validWeather=validRegion?.let { r -> weatherFact?.takeIf { it.usable(r.id,now) } }
                 val semantic=JSONObject().put("zone",validRegion?.zone?.name?:"UNKNOWN").put("timeOfDay",LocalDateTime.now().hour).put("origin","UNKNOWN").put("direction","UNKNOWN")
                 validWeather?.let { semantic.put("weather",JSONObject().put("temperature",it.temperature).put("precipitation",it.precipitation).put("stale",it.stale(now))) }
-                val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress)
+                val novelty=if(snapshot.demo) emptyMap() else runCatching { ai.drivemuse.app.catalog.NoveltyAnnotator(db.catalog()).annotate(prepared,emptySet(),runtime.historyCoverageSince()) }.getOrDefault(emptyMap())
+                val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,listOf(0,1,2),novelty,MixTarget.resolve(p))
                 val queue=selection.tracks
                 if(generation!=selectionGeneration || survey.value?.revision!=revision) return@launch
                 check(queue.isNotEmpty()) { if (effective.energyCeiling < 1.0) "잔잔한 곡 조건에 맞는 후보가 없습니다. 규칙을 조정해 주세요" else "조건에 맞는 곡이 없습니다. 규칙을 조정해 주세요" }
                 if(!snapshot.demo && !coordinator.commit(version,queue,prepared,constraints)) return@launch
                 if(generation!=selectionGeneration || survey.value?.revision!=revision) return@launch
                 progress=progress.append(queue)
-                mutable.update { it.copy(queue=queue,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · 같은 아티스트 연속 제외") }
+                mutable.update { it.copy(queue=queue,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
             } catch (e: CancellationException) { throw e }
               catch (e: Exception) { message(explain(e)) }
@@ -255,7 +258,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         suspendAgent()
         if(track!=null && !Constraints(excludedGenres=profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다");return }
         val result = playback.open(track)
-        if (track != null && !ui.value.demo) viewModelScope.launch { repository.recordPlay(track.id) }
+        // Exposure only (§17 EXPOSED_ONLY): counted for fatigue and novelty, never as listening.
+        if (track != null && !ui.value.demo) viewModelScope.launch { repository.recordPlay(track.id); db.catalog().ref("youtube",track.id)?.trackId?.let { db.catalog().recordExposure("default",it,System.currentTimeMillis(),runtime.historyCoverageSince()) } }
         message(result)
     }
 

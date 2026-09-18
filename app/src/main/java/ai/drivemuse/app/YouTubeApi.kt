@@ -29,7 +29,10 @@ private enum class Auth { USER, PUBLIC }
  * token, everything else with the API key. The two are mutually exclusive — sending both on
  * one request makes the API ambiguous about which principal it is serving.
  */
-class YouTubeApi(private val apiKey: String, private val tokens: TokenStore) {
+class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: TokenStore) {
+    /** Legacy build-constant constructor; the runtime config path (v2.3 §22) passes a provider instead. */
+    constructor(apiKey: String, tokens: TokenStore) : this({ apiKey }, tokens)
+    private val apiKey get() = apiKeyProvider()
 
     private val base = "https://www.googleapis.com/youtube/v3/"
 

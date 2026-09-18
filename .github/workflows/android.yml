@@ -1,0 +1,39 @@
+name: Android build and contracts
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ORG_GRADLE_PROJECT_ytApiKey: ${{ secrets.YT_API_KEY }}
+      ORG_GRADLE_PROJECT_weatherApiKey: ${{ secrets.WEATHER_API_KEY }}
+      ORG_GRADLE_PROJECT_geminiModel: ${{ vars.GEMINI_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - name: Optional Firebase configuration
+        env:
+          FIREBASE_CONFIG: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          config = os.environ.get("FIREBASE_CONFIG", "")
+          if config:
+              Path("app/google-services.json").write_text(config)
+          PYTHON
+      - run: python3 scripts/check_migration_sql.py
+      - run: chmod +x gradlew && ./gradlew :core:domain:test :app:testDebugUnitTest :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: DriveMuse-build
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/reports/tests
+            core/domain/build/reports/tests

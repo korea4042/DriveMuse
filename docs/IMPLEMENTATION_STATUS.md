@@ -1,6 +1,6 @@
-# 설계 v2.1 구현 상태
+# 설계 v2.3 구현 상태
 
-복원 작업일: 2026-09-18. 이전 작업 환경에서 수행한 테스트 횟수를 이번 결과로 재사용하지 않습니다.
+작업일: 2026-09-18. 표의 F01~F10은 v2.1 범위, 아래 v2.3 표는 16~32장 범위입니다.
 
 | 요구사항 | 현재 코드 | 남은 검증/제한 |
 |---|---|---|
@@ -14,8 +14,25 @@
 | F09 | 설문·홈·설정·평가·학습 초기화·운전 모드 | 기기 TalkBack·56dp·큰 글꼴 |
 | F10 | 가산 Room v3 마이그레이션, 30일 기록, 좌표 최소화, 삭제 취소 | Room 기기 업그레이드·개인 배포 서명 |
 
+## v2.3 추가 요구
+| 장 | 현재 코드 | 남은 검증/제한 |
+|---|---|---|
+| §16–17 발견·신규성 | `Discovery.kt` NoveltyResolver·DiscoveryPlanner·PoolHealth·CandidatePriority·DiversityAudit, `NoveltyAnnotator` | 실제 경험 데이터는 G2 관측 후 |
+| §18 스키마 | Room v4, 15개 신규 테이블, `MIGRATION_3_4` 스테이징 이관 | 기기 업그레이드, `app/schemas` 생성 확인 |
+| §19 수집 | `DiscoveryCoordinator`(lease·quota_ledger·RunLimits), `MetadataSyncWorker` 6h | 공급자 실 할당량, Doze 지연 |
+| §20 상태 표시 | `CatalogViewModel` CollectionStatus·CatalogSummary, 수집 상세 화면 | 실기기 문구·큰 글꼴 |
+| §22–23 연동 설정 | `CredentialStore`(Keystore AES-GCM), `IntegrationConfigRepository` draft→probe→promote, Probes | T16 백업 제외·캡처 보호 실기기 확인 |
+| §24 설정 가독성 | `SettingsScreen.kt` 요약행+상세, 진단 펼침 | 360dp·200%·TalkBack |
+| §27 Track 정체성 | `Catalog.kt` IdentityResolver·ValidationGate·PlayableRefResolver·AliasResolver | 평가 세트로 임계값 조정 |
+| §28 공급자 | `MusicKnowledge.kt` MusicBrainz/Last.fm/ListenBrainz 어댑터, ProviderHttp | 실키 연결, 약관·비상업 조건 |
+| §29 비율 | `Exploration.kt` MixTarget/ExplorationMix, RecommendationEngine에 mix 전달 | START_CONFIRMED 노출은 L2 이후 |
+| §30 슬롯 큐 | `SlotQueue.kt` SlotQueuePolicy CAS | L2 재생 명령 미구현(L0) |
+| §31 프롬프트 | selector v2.3, metadata-interpreter v2.3, discovery-planner v2.2 자산·검증기 | interpreter/planner AI 호출 미연결 |
+
 ## 검증 기록
-빌드와 테스트 진행 중. 최종 결과는 아래 검증 결과에 업데이트합니다.
+- 2026-09-18 `:core:domain` kotlinc 2.1.20 컴파일 + 리플렉션 러너: 86 passed / 0 failed.
+- `python3 scripts/check_migration_sql.py`: PASS.
+- `:app` Android 컴파일·APK: **미실행**(환경에 Android SDK 없음). CI(`.github/workflows/android.yml`)에서 확인 필요.
 
 ## 출시 게이트
 G0: YouTube Music 버전별 곡 ID, 위치, 상태, 종료 원인, 임의 곡 요청을 실기기에서 확인해야 합니다.

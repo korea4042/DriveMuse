@@ -5,7 +5,7 @@ android {
     namespace = "ai.drivemuse.app"
     compileSdk = 36
     defaultConfig {
-        applicationId = "ai.drivemuse.app"; minSdk = 33; targetSdk = 35; versionCode = 3; versionName = "0.3.0"
+        applicationId = "ai.drivemuse.app"; minSdk = 33; targetSdk = 35; versionCode = 4; versionName = "0.4.0"
         buildConfigField("String", "YT_API_KEY", quoted(providers.gradleProperty("ytApiKey").orNull ?: ""))
         buildConfigField("String", "GEMINI_MODEL", quoted(providers.gradleProperty("geminiModel").orNull ?: ""))
         buildConfigField("String", "WEATHER_API_KEY", quoted(providers.gradleProperty("weatherApiKey").orNull ?: ""))
@@ -13,7 +13,10 @@ android {
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
 }
+// Room exportSchema=true (design §18): keep every schema version under app/schemas for migration tests.
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-ai")

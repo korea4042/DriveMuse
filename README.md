@@ -1,6 +1,16 @@
-# DriveMuse 0.3.0 — v2.1 구현
+# DriveMuse 0.4.0 — 기술 설계 v2.3 구현
 
-Kotlin / Compose Android 앱. 첨부 제품·기술 설계 v2.1을 기준으로 기존 0.2.0에 초기 설문, Firebase AI Logic 역할별 추천, 선택 위치·날씨, 3곡 저장, 명시 평가와 순수 Kotlin 관측·학습 엔진을 추가했습니다.
+Kotlin / Compose Android 앱. 0.3.0(설계 v2.1: 설문, Firebase AI Logic 역할별 추천, 위치·날씨, 3곡 저장, 명시 평가·학습 엔진) 위에 기술 설계 v2.3의 16~32장을 추가했습니다.
+
+## v2.3에서 추가된 것
+- **Track 정체성(§27)**: `track` / `track_identifier` / `playable_ref` / `metadata_assertion` 분리. IdentityResolver(score≥.90, 차이≥.10, 독립 근거 2개, 버전 충돌 시 AMBIGUOUS), 결정적 ValidationGate, PlayableRefResolver(Official Audio → MV → Lyrics, Shorts 제외), identity_alias로 오병합 복구.
+- **음악 지식 공급자(§28)**: MusicBrainz(무키, UA, 초당 1회), Last.fm(API key만), ListenBrainz(선택 사용자명·토큰, 204/404 계약). 공급자별 rate limiter · circuit breaker(3회→15분) · Retry-After backoff.
+- **발견 대기열과 개인 신규성(§16–§19, §29)**: DISCOVERED→BASIC→ENRICHED→VALIDATED, queueStatus, 5단계 NoveltyState, 수집 예산 70/20/10, 우선순위 .45/.35/.20, PoolHealth 300/120/12/50, DB lease와 quota_ledger로 직렬화된 DiscoveryCoordinator, WorkManager 6시간 주기(비과금 기본).
+- **탐색 비율(§29)**: 선곡 50/40/10 기본, Q4 명시 응답 시 .15/.35/.55 우선(Discovery:Experimental 4:1), 세션 누적 정수 보정, 3세션·20 attempt 후 하루 5%p 조정.
+- **슬롯 큐(§30)**: PLANNED/LOCKED/START_CONFIRMED/TERMINAL/CANCELLED, baseQueueRevision CAS, 잠긴 슬롯 불변, 재시작 후 미확인 명령 재전송 금지.
+- **앱 내 연동 설정(§22–§24)**: AndroidKeyStore AES-GCM 자격증명 저장, draft → VALIDATING → READY/ERROR 원자 교체, configVersion·generation 증가, 요약 행 + 상세 화면 설정 UI(L0·false 같은 용어는 진단 펼침에만), `effectiveEnabled = requested && configReady`.
+- **프롬프트**: selector v2.3, metadata-interpreter v2.3, discovery-planner v2.2 추가. selector v2.1 폐기.
+- Room v4 가산 마이그레이션(기존 candidates → playable_ref UNMATCHED + discovery_item PENDING 스테이징, played는 노출 기록만).
 
 ## 빌드
 JDK 17, Android SDK 36, build-tools 35.0.0, Gradle wrapper 8.11.1.
@@ -11,6 +21,8 @@ python3 scripts/check_migration_sql.py
 ```
 
 외부 연결 설정이 없어도 빌드와 샘플 모드는 동작합니다. 실제 후보 조회에는 YouTube Data API 키가 필요합니다.
+
+키는 이제 앱의 설정 → 음악 서비스 / AI 화면에서 입력·검증·저장하는 것이 기본입니다(암호화 저장, 재빌드 불필요). 아래 Gradle 속성은 **선택 기본값**이며 사용자가 앱에서 삭제하면 자동으로 되살리지 않습니다.
 
 - `-PytApiKey=...`: YouTube Data API 키. Android 패키지·서명과 API 제한을 설정하세요.
 - `app/google-services.json`: 자신의 Firebase Android 앱 설정. 파일이 있을 때 Google Services 플러그인이 적용됩니다. 서비스 계정 비밀 키가 아닙니다.
@@ -37,6 +49,17 @@ Firebase 프로젝트에서 AI Logic과 App Check를 구성해야 합니다. 디
 - 네트워크 자동 재시도는 없습니다. 실패 시 검증된 로컬 후보를 사용합니다.
 - 행동 특징의 상황/장기 학습 엔진은 준비되어 있지만, L0에서 실제 재생 증거를 생성하지 않습니다.
 - AI 설문 출력은 근거 ID 직접 매핑을 검증하는 축약 계약입니다. 원본 질문·답변·의도·범위는 그대로 저장합니다.
+
+## 이번 작업에서 검증한 것 / 못 한 것
+- `:core:domain` 순수 Kotlin: kotlinc 2.1.20으로 컴파일·실행, 86개 테스트 통과(신규 `CatalogV23Test` 포함: T01·T02·T05·T12·T15~T19·T24·T26·T27·T29~T32).
+- `scripts/check_migration_sql.py` PASS (v4 테이블·스테이징·ISRC 비유일).
+- **`:app` 모듈은 이 환경에 Android SDK가 없어 컴파일하지 못했습니다.** Room KSP·Compose import 오류가 있을 수 있으니 `./gradlew :app:assembleDebug`로 먼저 확인하세요. Room `exportSchema=true`이므로 `app/schemas/`에 스키마 JSON이 생성됩니다.
+- 실기기 G0/G2/G3, 공급자 실연동(키·할당량·약관)은 미검증입니다.
+
+## 과도기 상태(다음 단계)
+- 추천 후보는 아직 videoId 기반 소스를 사용하며 NoveltyAnnotator가 playable_ref → track_experience 링크로 신규성만 주석합니다. VALIDATED Track 소스로 완전 전환은 다음 단계입니다.
+- metadata-interpreter 역할과 discovery-planner AI 경로는 계약·검증기만 있고 호출은 연결하지 않았습니다(로컬 결정적 계획 사용).
+- `user_track_context`는 스키마만 있습니다. L1/L2 재생 수준 전환은 G0 통과 전까지 없습니다.
 
 자세한 검증 범위와 남은 기기 검증은 `docs/IMPLEMENTATION_STATUS.md`, `docs/DEVICE_QA.md`를 확인하세요.
 

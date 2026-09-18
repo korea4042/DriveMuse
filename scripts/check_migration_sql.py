@@ -5,9 +5,14 @@ s=(root/'app/src/main/java/ai/drivemuse/app/Storage.kt').read_text()
 db=sqlite3.connect(':memory:')
 db.execute('CREATE TABLE rules (id TEXT PRIMARY KEY, text TEXT)')
 db.execute('CREATE TABLE history (id TEXT PRIMARY KEY, title TEXT)')
+db.execute("CREATE TABLE played (rowId INTEGER PRIMARY KEY AUTOINCREMENT, videoId TEXT, playedAt INTEGER)")
 db.execute("INSERT INTO rules VALUES ('existing','keep')")
 db.execute("INSERT INTO history VALUES ('existing','keep')")
-for statement in re.findall(r'db.execSQL\("([^"\n]+)"\)',s): db.execute(statement)
+statements=re.findall(r'db.execSQL\("([^"\n]+)"\)',s)
+for statement in statements:
+    if statement.startswith('CREATE TABLE IF NOT EXISTS `candidates`'):
+        db.execute(statement); db.execute("INSERT INTO candidates VALUES ('abcdefghijk','Blue Hour','Northbound',210,'',0,.5,.5,NULL,'chart',1000)"); db.execute("INSERT INTO played (videoId, playedAt) VALUES ('abcdefghijk', 5)")
+    else: db.execute(statement)
 assert db.execute('SELECT text FROM rules').fetchone()==('keep',)
 assert db.execute('SELECT title FROM history').fetchone()==('keep',)
 assert db.execute('SELECT count(*) FROM outcomes').fetchone()==(0,)
@@ -18,4 +23,14 @@ try:
  db.execute('INSERT INTO batches VALUES (?,?,?,?,?,?,?,?,?,?)',('different',)+row[1:])
  raise AssertionError('duplicate generation accepted')
 except sqlite3.IntegrityError: pass
-print('PASS: additive migrations preserve existing rows and enforce unique batch generation')
+# v2.3 §18/§27: legacy videos become UNMATCHED staging refs + PENDING discovery items, never VALIDATED tracks; played is not listening evidence.
+assert db.execute("SELECT matchStatus, trackId FROM playable_ref WHERE resourceId='abcdefghijk'").fetchone()==('UNMATCHED',None)
+assert db.execute("SELECT queueStatus FROM discovery_item WHERE rawRef='abcdefghijk'").fetchone()==('PENDING',)
+assert db.execute('SELECT count(*) FROM track').fetchone()==(0,)
+assert db.execute('SELECT count(*) FROM track_experience').fetchone()==(0,)
+assert db.execute('SELECT count(*) FROM played').fetchone()==(1,)
+assert db.execute("SELECT generation FROM collection_control WHERE scope='default'").fetchone()==(1,)
+for t in ['track','track_identifier','playable_ref','metadata_assertion','discovery_item','enrichment_job','validation_decision','identity_alias','track_experience','user_track_context','discovery_seed','collection_run','collection_control','quota_ledger','integration_config']:
+    assert db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(t,)).fetchone(), t
+db.execute("INSERT INTO track_identifier VALUES ('t1','ISRC','KR1',\"MB\",0)"); db.execute("INSERT INTO track_identifier VALUES ('t2','ISRC','KR1','MB',0)")  # ISRC not globally unique (§27)
+print('PASS: additive migrations v1→v4 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only')

@@ -11,16 +11,18 @@ import java.net.URLEncoder
 import java.time.*
 import java.time.format.DateTimeFormatter
 
-class WeatherRepository {
+class WeatherRepository(private val keyProvider: () -> String = { BuildConfig.WEATHER_API_KEY }) {
     private var cached: WeatherFact?=null;private var lastAttempt=0L
+    private val apiKey get() = keyProvider().ifBlank { BuildConfig.WEATHER_API_KEY }
+    val configured get() = apiKey.isNotBlank()
     fun clear() { cached=null;lastAttempt=0 }
     suspend fun get(region: Region): WeatherFact? = withContext(Dispatchers.IO) {
         val now=System.currentTimeMillis();val valid=cached?.takeIf { it.usable(region.id,now) }
-        if(BuildConfig.WEATHER_API_KEY.isBlank() || now-lastAttempt<300000 || valid!=null && now-valid.observedAt<900000) return@withContext valid
+        if(apiKey.isBlank() || now-lastAttempt<300000 || valid!=null && now-valid.observedAt<900000) return@withContext valid
         lastAttempt=now
         val connection=try {
             val base=ZonedDateTime.now(ZoneId.of("Asia/Seoul")).minusMinutes(40).withMinute(0).withSecond(0).withNano(0)
-            val query="serviceKey=${URLEncoder.encode(BuildConfig.WEATHER_API_KEY,"UTF-8")}&pageNo=1&numOfRows=100&dataType=JSON&base_date=${base.format(DateTimeFormatter.ofPattern("yyyyMMdd"))}&base_time=${base.format(DateTimeFormatter.ofPattern("HHmm"))}&nx=${region.x}&ny=${region.y}"
+            val query="serviceKey=${URLEncoder.encode(apiKey,"UTF-8")}&pageNo=1&numOfRows=100&dataType=JSON&base_date=${base.format(DateTimeFormatter.ofPattern("yyyyMMdd"))}&base_time=${base.format(DateTimeFormatter.ofPattern("HHmm"))}&nx=${region.x}&ny=${region.y}"
             (URL("https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst?$query").openConnection() as HttpURLConnection).apply { connectTimeout=5000;readTimeout=5000;instanceFollowRedirects=false }
         } catch(_: Exception) { return@withContext valid }
         try {

@@ -1,0 +1,201 @@
+package ai.drivemuse.app.ui
+
+import ai.drivemuse.app.*
+import ai.drivemuse.designsystem.*
+import ai.drivemuse.domain.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+/*
+ * Technical design v2.3 §24. Type scale: title 24sp, section 18–20sp, body 16/24sp, caption 14/20sp.
+ * Spacing: screen 20dp, card 20dp, group gap 24dp, item gap 12–16dp. One primary action per row,
+ * touch targets ≥ 48dp, status never conveyed by colour alone, dev terms only in "진단" expander.
+ */
+
+@Composable fun SettingsHome(
+    vm: DriveViewModel, cvm: CatalogViewModel, settings: Settings, aiConsent: Boolean,
+    weatherLabel: String, observationAvailable: Boolean, onOpen: (String) -> Unit, onRequestBluetooth: () -> Unit
+) {
+    val integrations by cvm.integrations.collectAsStateWithLifecycleCompat()
+    val collection by cvm.collection.collectAsStateWithLifecycleCompat()
+    val yt = integrations.getValue(ProviderId.YOUTUBE); val ai = integrations.getValue(ProviderId.FIREBASE_AI)
+    val aiReady = vm.aiConfigured || ai.ready
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        SettingsTitle("나에게 맞게.", "상태를 보고, 필요한 것만 바꾸세요")
+        GlassSurface {
+            SummaryRow(Icons.Outlined.MusicNote, "음악 서비스", if (yt.ready || vm.apiKeyConfigured) (if (settings.accountLinked) "연결됨 · Google 계정 읽기 전용" else "연결됨 · 인기 음악과 검색") else "미연결", if (yt.ready || vm.apiKeyConfigured) null else "설정 필요") { onOpen("설정/음악 서비스") }
+            SummaryRow(Icons.Outlined.PlayCircle, "재생과 청취 학습", if (observationAvailable) "음악 앱에서 재생할 수 있어요 · 청취 상태 확인 중" else "음악 앱에서 재생할 수 있어요 · 자동 학습 꺼짐", null) { onOpen("설정/재생") }
+            SummaryRow(Icons.Outlined.AutoAwesome, "AI 추천", when { !aiReady -> "설정 필요"; IntegrationPolicy.effectiveEnabled(aiConsent, aiReady) -> "사용 중"; else -> "꺼짐" }, if (!aiReady) "설정 필요" else null) { onOpen("설정/AI") }
+            SummaryRow(Icons.Outlined.WbSunny, "위치와 날씨", weatherLabel, if (!vm.weatherConfigured) "날씨 설정 필요" else null) { onOpen("설정/위치") }
+            SummaryRow(Icons.Outlined.Home, "집과 회사", "장소를 등록하면 출퇴근 상황을 더 잘 이해해요", null) { onOpen("설정/장소") }
+            SummaryRow(Icons.Outlined.LibraryMusic, "음악 정보 수집", collection.lastSuccessAt?.let { "마지막 갱신 ${time(it)} · ${collection.phase}" } ?: collection.phase, null) { onOpen("설정/수집") }
+        }
+        GlassSurface {
+            SummaryRow(Icons.Outlined.DirectionsCar, "차량 연결", if (settings.vehicleName.isNotBlank()) settings.vehicleName else "차량 미등록", null) { onOpen("설정/차량") }
+            SummaryRow(Icons.Outlined.Shield, "개인정보", "저장하는 데이터와 삭제", null) { onOpen("개인정보") }
+            SummaryRow(Icons.Outlined.History, "추천 기록", "최근 30일", null) { onOpen("기록") }
+        }
+        Text("데모 모드·차량 알림·권한은 각 상세 화면에서 바꿀 수 있어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        Spacer(Modifier.height(4.dp)); TextButton(onClick = onRequestBluetooth, modifier = Modifier.heightIn(min = 48.dp)) { Text("권한 다시 요청") }
+    }
+}
+
+/** Detail: music service integration (§22). YouTube key only; Google account is a consent flow; no Client Secret anywhere. */
+@Composable fun MusicServiceDetail(vm: DriveViewModel, cvm: CatalogViewModel, settings: Settings, driving: Boolean) {
+    val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        SettingsTitle("음악 서비스", "곡 정보를 어디서 가져올지 정합니다")
+        IntegrationCard(cvm, ProviderId.YOUTUBE, integrations.getValue(ProviderId.YOUTUBE), busy == ProviderId.YOUTUBE, driving, "공개 조회에 필요한 키입니다. Google Cloud 콘솔에서 Android 앱 패키지·서명으로 제한하는 것을 권장해요.")
+        GlassSurface {
+            SectionTitle("Google 계정")
+            Text(if (settings.accountLinked) "연결됨 · 읽기 전용" else "미연결", fontSize = 16.sp, lineHeight = 24.sp)
+            Text("좋아요·구독 정보를 읽기 전용으로 사용합니다. 별도 키 입력은 없고, 비밀번호나 Client Secret을 묻지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            if (settings.accountLinked) OutlinedButton(onClick = vm::disconnect, enabled = !driving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("계정 연결 해제") }
+            else DriveButton("Google 계정 연결", !driving) { vm.linkAccount() }
+            Expander("등록 정보 (고급)") { Text("Android OAuth 클라이언트는 패키지명 ai.drivemuse.app 과 앱 서명 SHA-1로 콘솔에 등록합니다. 텍스트로 Client ID를 바꾸는 것만으로 앱의 신원이 바뀌지는 않습니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+        }
+        SectionTitle("음악 지식 (선택)")
+        IntegrationCard(cvm, ProviderId.MUSICBRAINZ, integrations.getValue(ProviderId.MUSICBRAINZ), false, driving, "곡 식별에 사용합니다. 별도 키 없이 사용하며, 앱이 요청 속도를 관리합니다.")
+        IntegrationCard(cvm, ProviderId.LASTFM, integrations.getValue(ProviderId.LASTFM), busy == ProviderId.LASTFM, driving, "장르 태그에 사용합니다. API 키만 필요하고 Last.fm 로그인이나 Shared Secret은 필요하지 않아요.")
+        IntegrationCard(cvm, ProviderId.LISTENBRAINZ, integrations.getValue(ProviderId.LISTENBRAINZ), busy == ProviderId.LISTENBRAINZ, driving, "선택 연결입니다. 사용자명을 입력하면 그 계정의 추천을 발견 seed로 사용하고, 입력하지 않으면 공개 정보만 씁니다.")
+    }
+}
+
+@Composable private fun IntegrationCard(cvm: CatalogViewModel, p: ProviderId, cfg: IntegrationConfig, busy: Boolean, driving: Boolean, help: String) {
+    val fields = ProviderRequirements.fields(p)
+    val values = remember(p) { mutableStateMapOf<String, String>() }
+    val reveal = remember { mutableStateMapOf<String, Boolean>() }
+    GlassSurface {
+        SectionTitle(cvm.label(p))
+        Text(when (cfg.status) { IntegrationStatus.READY -> "연결됨" + (cfg.lastValidatedAt?.let { " · ${time(it)} 확인" } ?: ""); IntegrationStatus.VALIDATING -> "확인 중"; IntegrationStatus.ERROR -> "연결 실패 · ${cvm.explain(cfg.error)}"; IntegrationStatus.DRAFT -> "저장 전"; IntegrationStatus.UNCONFIGURED -> if (fields.any { it.required }) "설정 필요" else "별도 키 없이 사용" }, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+        Text(help, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        if (driving) { Text("정차 후 설정에서 입력할 수 있어요.", fontSize = 14.sp, color = DriveColors.Muted); return@GlassSurface }
+        fields.forEach { f ->
+            OutlinedTextField(
+                value = values[f.key] ?: "", onValueChange = { values[f.key] = it.take(512) }, label = { Text(f.label + if (f.required) "" else " · 선택") }, singleLine = true,
+                visualTransformation = if (f.secret && reveal[f.key] != true) PasswordVisualTransformation() else VisualTransformation.None,
+                keyboardOptions = KeyboardOptions(keyboardType = if (f.secret) KeyboardType.Password else KeyboardType.Text, autoCorrect = false),
+                trailingIcon = if (f.secret) { { IconButton(onClick = { reveal[f.key] = reveal[f.key] != true }, modifier = Modifier.size(48.dp)) { Icon(if (reveal[f.key] == true) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (reveal[f.key] == true) "숨기기" else "보기") } } } else null,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (fields.isNotEmpty()) {
+            val canSave = fields.filter { it.required }.all { !values[it.key].isNullOrBlank() }
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            DriveButton(if (cfg.ready) "새 값으로 다시 확인" else "저장하고 연결 테스트", canSave && !busy) { cvm.saveIntegration(p, values.toMap()); values.keys.filter { k -> fields.first { it.key == k }.secret }.forEach { values[it] = "" } }
+            if (cfg.ready || cfg.status == IntegrationStatus.ERROR) TextButton(onClick = { cvm.removeIntegration(p) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("이 연결 삭제") }
+        }
+    }
+}
+
+/** Detail: playback & listening (§24 wording; L0/L1/L2 only in the diagnostics expander). */
+@Composable fun PlaybackDetail(diagnosticState: String, hasMediaId: Boolean, positionMs: Long?, onOpenNotificationSettings: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        SettingsTitle("재생과 청취 학습", "음악 앱에서 재생하고, 확인된 것만 배웁니다")
+        GlassSurface {
+            Text("음악 앱에서 재생할 수 있어요", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text("추천한 곡은 YouTube Music에서 열립니다. 앱 안에서 자동으로 곡을 바꾸지는 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        }
+        GlassSurface {
+            Text(if (hasMediaId) "청취 상태를 확인하고 있어요" else "아직 청취 상태를 확인할 수 없어요", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text("청취 상태 접근을 허용하면 어떤 곡이 얼마나 재생됐는지 확인해 학습에 쓸 수 있어요. 허용해도 자동 전환은 켜지지 않습니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            DriveButton("청취 상태 접근 허용") { onOpenNotificationSettings() }
+            Expander("개발 진단") { Text("재생 연동 수준 L0 · 열기 전용 / 관측 상태 $diagnosticState / 곡 ID 제공 $hasMediaId / 재생 위치 ${positionMs?.let { "${it}ms" } ?: "미상"}", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+        }
+    }
+}
+
+/** Detail: AI (§24). Toggle is only shown enabled once config is READY; effectiveEnabled drives the label. */
+@Composable fun AiDetail(configReady: Boolean, requested: Boolean, onRequested: (Boolean) -> Unit, onSetupHelp: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        SettingsTitle("AI 추천", "설정이 끝난 뒤에만 사용할 수 있어요")
+        GlassSurface {
+            Text(when { !configReady -> "설정 필요"; IntegrationPolicy.effectiveEnabled(requested, configReady) -> "사용 중"; else -> "꺼짐" }, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            if (!configReady) { Text("이 빌드는 Firebase 구성 파일(google-services.json)과 모델 ID로 연결합니다. 구성이 없으면 기본 선곡을 사용합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted); DriveButton("AI 연결 설정 안내") { onSetupHelp() } }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 48.dp)) {
+                Column(Modifier.weight(1f)) { Text("AI 추천 사용", fontWeight = FontWeight.SemiBold, fontSize = 16.sp); Text("답변, 후보 곡, 요약 반응을 Google에 전송합니다. 좌표·토큰은 보내지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+                Switch(checked = IntegrationPolicy.effectiveEnabled(requested, configReady), onCheckedChange = onRequested, enabled = configReady, modifier = Modifier.semantics { contentDescription = if (configReady) "AI 추천 사용" else "AI 추천 사용 · 설정 필요" })
+            }
+            if (configReady && !requested) Text("기본 선곡 사용 중", fontSize = 14.sp, color = DriveColors.Muted)
+        }
+    }
+}
+
+/** Detail: collection (§20 status, §24 rows). Counters from different sources are shown separately. */
+@Composable fun CollectionDetail(cvm: CatalogViewModel, driving: Boolean) {
+    val c by cvm.collection.collectAsStateWithLifecycleCompat(); val s by cvm.summary.collectAsStateWithLifecycleCompat()
+    LaunchedEffect(c) { cvm.refreshSummary() }
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        SettingsTitle("음악 정보 수집", "재생 없이 후보를 모아 둡니다")
+        GlassSurface {
+            Text(c.phase, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text(c.lastSuccessAt?.let { "마지막 성공 ${time(it)}" } ?: "아직 성공한 수집이 없어요", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            if (!driving) {
+                ToggleRow("자동 수집", "약 6시간마다, 배터리·저장 공간이 충분할 때", c.autoEnabled, cvm::setAutoCollect)
+                ToggleRow("Wi-Fi에서만", "모바일 데이터에서는 수집하지 않아요", c.unmeteredOnly, cvm::setUnmeteredOnly)
+                DriveButton("지금 후보 보충", c.phase != "수집 중") { cvm.topUpNow() }
+            } else Text("정차 후 설정에서 바꿀 수 있어요.", fontSize = 14.sp, color = DriveColors.Muted)
+        }
+        GlassSurface {
+            SectionTitle("보유 후보")
+            Metric("검증된 곡", "${s.validated}곡"); Metric("지금 재생 가능", "${s.playable}곡"); Metric("청취 기록 없는 후보", "${s.noHistory}곡")
+            Metric("이번 실행 추가 / 갱신", "${c.inserted} / ${c.updated}"); Metric("확인 대기", "${s.queuePending + s.queueRetry}건")
+            Text("수집 건수는 학습이 아니에요. 청취 학습은 아래 별도로 표시합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        }
+        GlassSurface { SectionTitle("청취 학습"); Metric("유효 청취 확인 곡", "${s.confirmedListened}곡"); Text("재생 상태를 확인할 수 있을 때만 늘어납니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+    }
+}
+
+@Composable fun PlacesDetail(onRegisterHome: () -> Unit, onRegisterWork: () -> Unit, onDelete: () -> Unit, driving: Boolean) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        SettingsTitle("집과 회사", "현재 위치를 중심점으로 등록합니다")
+        GlassSurface {
+            Text("등록한 중심점과 반경만 기기에 암호화 저장합니다. 이동 경로는 저장하지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            DriveButton("현재 위치를 집으로 등록", !driving, onRegisterHome); DriveButton("현재 위치를 회사로 등록", !driving, onRegisterWork)
+            if (!driving) TextButton(onClick = onDelete, modifier = Modifier.heightIn(min = 48.dp)) { Text("등록 장소 삭제") }
+        }
+    }
+}
+
+// ---- building blocks (§24 type/spacing) ----
+@Composable fun SettingsTitle(title: String, sub: String) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(title, fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold); Text(sub, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) } }
+@Composable fun SectionTitle(text: String) = Text(text, fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold)
+@Composable fun SummaryRow(icon: ImageVector, title: String, status: String, badge: String?, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp).semantics { contentDescription = "$title · $status" + (badge?.let { " · $it" } ?: "") }, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(icon, null, tint = DriveColors.Muted)
+        Column(Modifier.weight(1f)) { Text(title, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium); Text(status, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+        if (badge != null) Surface(shape = MaterialTheme.shapes.small, color = DriveColors.High) { Text(badge, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) }
+        Icon(Icons.Outlined.ChevronRight, null, tint = DriveColors.Muted)
+    }
+}
+@Composable fun ToggleRow(title: String, description: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 48.dp)) { Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp); Text(description, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }; Switch(checked = value, onCheckedChange = onChange) }
+}
+@Composable fun Metric(label: String, value: String) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(label, fontSize = 16.sp, lineHeight = 24.sp); Text(value, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold) } }
+@Composable fun Expander(title: String, content: @Composable () -> Unit) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    TextButton(onClick = { open = !open }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (open) "$title 닫기" else "$title 보기") }
+    if (open) content()
+}
+private fun time(ms: Long) = DateTimeFormatter.ofPattern("MM.dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(ms))
+@Composable fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateWithLifecycleCompat(): State<T> = androidx.lifecycle.compose.collectAsStateWithLifecycle()

@@ -9,6 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import ai.drivemuse.domain.*
+import ai.drivemuse.app.catalog.*
 
 val Context.driveStore by preferencesDataStore("drivemuse")
 
@@ -109,10 +110,14 @@ class Preferences(private val context: Context) {
     @Query("DELETE FROM played") suspend fun clearPlayed()
 }
 
-@Database(entities = [RuleEntity::class, HistoryEntity::class, CandidateEntity::class, PlayedEntity::class, IntelligenceState::class, BatchEntity::class, OutcomeEntity::class], version = 3, exportSchema = false)
+@Database(entities = [RuleEntity::class, HistoryEntity::class, CandidateEntity::class, PlayedEntity::class, IntelligenceState::class, BatchEntity::class, OutcomeEntity::class,
+    TrackEntity::class, TrackIdentifierEntity::class, PlayableRefEntity::class, MetadataAssertionEntity::class, DiscoveryItemEntity::class, EnrichmentJobEntity::class, ValidationDecisionEntity::class,
+    IdentityAliasEntity::class, TrackExperienceEntity::class, UserTrackContextEntity::class, DiscoverySeedEntity::class, CollectionRunEntity::class, CollectionControlEntity::class, QuotaLedgerEntity::class, IntegrationConfigEntity::class],
+    version = 4, exportSchema = true)
 abstract class DriveDatabase: RoomDatabase() {
     abstract fun dao(): DriveDao
     abstract fun intelligence(): IntelligenceDao
+    abstract fun catalog(): CatalogDao
     companion object {
         /** Additive only: rules and history from 0.1.0 installs survive the upgrade. */
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -130,9 +135,56 @@ abstract class DriveDatabase: RoomDatabase() {
                 db.execSQL("ALTER TABLE `candidates` ADD COLUMN `audioLanguage` TEXT")
             }
         }
+        /**
+         * v2.3 §18/§27: Track/Video normalization, discovery queue, experience, collection control,
+         * quota ledger, integration config. Additive only. Existing `candidates` rows are copied into
+         * playable_ref as UNMATCHED provider resources (staging), never straight into VALIDATED tracks;
+         * `played` stays a handoff-exposure log and is not turned into listening evidence.
+         */
+        private val MIGRATION_3_4 = object : Migration(3,4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `track` (`trackId` TEXT NOT NULL, `title` TEXT NOT NULL, `primaryArtist` TEXT NOT NULL, `artistCreditsJson` TEXT NOT NULL, `durationMs` INTEGER, `releaseDate` TEXT, `releasePrecision` TEXT, `versionType` TEXT NOT NULL, `metadataStatus` TEXT NOT NULL, `identityVersion` INTEGER NOT NULL, `metadataVersion` INTEGER NOT NULL, `workGroupId` TEXT, `eligible` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`trackId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_metadataStatus` ON `track` (`metadataStatus`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_primaryArtist` ON `track` (`primaryArtist`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `track_identifier` (`trackId` TEXT NOT NULL, `type` TEXT NOT NULL, `value` TEXT NOT NULL, `source` TEXT NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`trackId`, `type`, `value`, `source`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_identifier_type_value` ON `track_identifier` (`type`, `value`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `playable_ref` (`provider` TEXT NOT NULL, `resourceId` TEXT NOT NULL, `trackId` TEXT, `kind` TEXT NOT NULL, `versionType` TEXT NOT NULL, `matchStatus` TEXT NOT NULL, `matchEvidenceJson` TEXT NOT NULL, `title` TEXT NOT NULL, `channel` TEXT NOT NULL, `durationMs` INTEGER, `fetchedAt` INTEGER NOT NULL, `expiresAt` INTEGER NOT NULL, `availability` TEXT NOT NULL, PRIMARY KEY(`provider`, `resourceId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playable_ref_trackId` ON `playable_ref` (`trackId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playable_ref_expiresAt` ON `playable_ref` (`expiresAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playable_ref_matchStatus` ON `playable_ref` (`matchStatus`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `metadata_assertion` (`assertionId` TEXT NOT NULL, `trackId` TEXT NOT NULL, `field` TEXT NOT NULL, `value` TEXT NOT NULL, `basis` TEXT NOT NULL, `source` TEXT NOT NULL, `sourceRecordId` TEXT, `confidence` REAL NOT NULL, `fetchedAt` INTEGER NOT NULL, `expiresAt` INTEGER NOT NULL, `licenseRef` TEXT, `evidenceIdsJson` TEXT NOT NULL, `modelId` TEXT, `promptVersion` TEXT, PRIMARY KEY(`assertionId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_assertion_trackId_field` ON `metadata_assertion` (`trackId`, `field`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_metadata_assertion_expiresAt` ON `metadata_assertion` (`expiresAt`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `discovery_item` (`discoveryItemId` TEXT NOT NULL, `scope` TEXT NOT NULL, `sourceKey` TEXT NOT NULL, `rawRef` TEXT NOT NULL, `provider` TEXT NOT NULL, `proposedTrackId` TEXT, `queueStatus` TEXT NOT NULL, `attempts` INTEGER NOT NULL, `retryAt` INTEGER NOT NULL, `generation` INTEGER NOT NULL, `discoveredAt` INTEGER NOT NULL, `lastError` TEXT, `budgetBand` TEXT NOT NULL, PRIMARY KEY(`discoveryItemId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_discovery_item_scope_queueStatus` ON `discovery_item` (`scope`, `queueStatus`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_discovery_item_retryAt` ON `discovery_item` (`retryAt`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_discovery_item_scope_sourceKey_rawRef` ON `discovery_item` (`scope`, `sourceKey`, `rawRef`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `enrichment_job` (`jobId` TEXT NOT NULL, `scope` TEXT NOT NULL, `itemId` TEXT NOT NULL, `provider` TEXT NOT NULL, `metadataVersion` INTEGER NOT NULL, `state` TEXT NOT NULL, `attempts` INTEGER NOT NULL, `leaseOwner` TEXT, `leaseUntil` INTEGER NOT NULL, `configVersion` INTEGER NOT NULL, PRIMARY KEY(`jobId`))")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_enrichment_job_scope_itemId_provider_metadataVersion` ON `enrichment_job` (`scope`, `itemId`, `provider`, `metadataVersion`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_enrichment_job_state` ON `enrichment_job` (`state`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `validation_decision` (`decisionId` TEXT NOT NULL, `trackId` TEXT NOT NULL, `identityVersion` INTEGER NOT NULL, `rulesetVersion` TEXT NOT NULL, `inputHash` TEXT NOT NULL, `matchedEvidenceIdsJson` TEXT NOT NULL, `decision` TEXT NOT NULL, `reasonsJson` TEXT NOT NULL, `decidedAt` INTEGER NOT NULL, PRIMARY KEY(`decisionId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_validation_decision_trackId_identityVersion` ON `validation_decision` (`trackId`, `identityVersion`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `identity_alias` (`rowId` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `oldTrackId` TEXT NOT NULL, `canonicalTrackId` TEXT NOT NULL, `decisionId` TEXT NOT NULL, `effectiveAt` INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_identity_alias_oldTrackId` ON `identity_alias` (`oldTrackId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `track_experience` (`accountScope` TEXT NOT NULL, `trackId` TEXT NOT NULL, `confirmedListenCount` INTEGER NOT NULL, `lastConfirmedListenAt` INTEGER, `explicitPreference` INTEGER, `surveySeed` INTEGER NOT NULL, `exposureCount` INTEGER NOT NULL, `lastExposureAt` INTEGER, `matchAmbiguous` INTEGER NOT NULL, `historyCoverageSince` INTEGER, PRIMARY KEY(`accountScope`, `trackId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_track_experience_accountScope_lastConfirmedListenAt` ON `track_experience` (`accountScope`, `lastConfirmedListenAt`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `user_track_context` (`accountScope` TEXT NOT NULL, `trackId` TEXT NOT NULL, `contextType` TEXT NOT NULL, `validAttempts` INTEGER NOT NULL, `positiveWeight` REAL NOT NULL, `negativeWeight` REAL NOT NULL, `lastUpdated` INTEGER NOT NULL, PRIMARY KEY(`accountScope`, `trackId`, `contextType`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `discovery_seed` (`accountScope` TEXT NOT NULL, `seedId` TEXT NOT NULL, `kind` TEXT NOT NULL, `value` TEXT NOT NULL, `profileVersion` INTEGER NOT NULL, `cursor` TEXT, `lastAttemptAt` INTEGER NOT NULL, `nextEligibleAt` INTEGER NOT NULL, `evidenceIdsJson` TEXT NOT NULL, PRIMARY KEY(`accountScope`, `seedId`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `collection_run` (`runId` TEXT NOT NULL, `scope` TEXT NOT NULL, `generation` INTEGER NOT NULL, `profileVersion` INTEGER NOT NULL, `configVersion` INTEGER NOT NULL, `status` TEXT NOT NULL, `startedAt` INTEGER NOT NULL, `finishedAt` INTEGER, `inserted` INTEGER NOT NULL, `updated` INTEGER NOT NULL, `rejected` INTEGER NOT NULL, `requests` INTEGER NOT NULL, `errorCode` TEXT, `reasonsJson` TEXT NOT NULL, PRIMARY KEY(`runId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_collection_run_scope_status` ON `collection_run` (`scope`, `status`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `collection_control` (`scope` TEXT NOT NULL, `generation` INTEGER NOT NULL, `leaseOwner` TEXT, `leaseUntil` INTEGER NOT NULL, `lastSuccessAt` INTEGER, `nextEligibleAt` INTEGER NOT NULL, `autoEnabled` INTEGER NOT NULL, `unmeteredOnly` INTEGER NOT NULL, PRIMARY KEY(`scope`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `quota_ledger` (`budgetScope` TEXT NOT NULL, `windowKey` TEXT NOT NULL, `endpoint` TEXT NOT NULL, `reserved` INTEGER NOT NULL, `consumed` INTEGER NOT NULL, `limit` INTEGER NOT NULL, `resetAt` INTEGER NOT NULL, PRIMARY KEY(`budgetScope`, `windowKey`, `endpoint`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `integration_config` (`provider` TEXT NOT NULL, `authMode` TEXT NOT NULL, `clientId` TEXT, `endpointId` TEXT, `modelId` TEXT, `credentialRef` TEXT, `configVersion` INTEGER NOT NULL, `status` TEXT NOT NULL, `error` TEXT NOT NULL, `lastValidatedAt` INTEGER, `presentKeysJson` TEXT NOT NULL, PRIMARY KEY(`provider`))")
+                // Staging copy of the v2 video cache: UNMATCHED refs, 30-day expiry, no Track linkage yet (§27).
+                db.execSQL("INSERT OR IGNORE INTO `playable_ref` (`provider`,`resourceId`,`trackId`,`kind`,`versionType`,`matchStatus`,`matchEvidenceJson`,`title`,`channel`,`durationMs`,`fetchedAt`,`expiresAt`,`availability`) SELECT 'youtube', `videoId`, NULL, 'UNKNOWN', 'UNKNOWN', 'UNMATCHED', '[]', `title`, `artist`, `durationSec`*1000, `fetchedAt`, `fetchedAt`+2592000000, 'UNKNOWN' FROM `candidates`")
+                // Discovery items for staged refs so the worker resolves them; sourceKey records the legacy origin.
+                db.execSQL("INSERT OR IGNORE INTO `discovery_item` (`discoveryItemId`,`scope`,`sourceKey`,`rawRef`,`provider`,`proposedTrackId`,`queueStatus`,`attempts`,`retryAt`,`generation`,`discoveredAt`,`lastError`,`budgetBand`) SELECT 'legacy:'||`videoId`, 'default', 'legacy:'||`source`, `videoId`, 'youtube', NULL, 'PENDING', 0, 0, 1, `fetchedAt`, NULL, 'ADJACENT' FROM `candidates`")
+                db.execSQL("INSERT OR IGNORE INTO `collection_control` (`scope`,`generation`,`leaseOwner`,`leaseUntil`,`lastSuccessAt`,`nextEligibleAt`,`autoEnabled`,`unmeteredOnly`) VALUES ('default', 1, NULL, 0, NULL, 0, 1, 1)")
+            }
+        }
         @Volatile private var instance: DriveDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
         }
     }
 }

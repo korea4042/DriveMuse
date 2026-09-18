@@ -1,6 +1,7 @@
 package ai.drivemuse.app
 
 import ai.drivemuse.app.onboarding.OnboardingScreen
+import ai.drivemuse.app.ui.*
 import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.content.pm.PackageManager
@@ -44,8 +45,9 @@ import java.time.format.DateTimeFormatter
 class MainActivity: ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); enableEdgeToEdge(); setContent { DriveMuseTheme { DriveApp() } } }
 }
-@Composable fun DriveApp(vm: DriveViewModel = viewModel()) {
+@Composable fun DriveApp(vm: DriveViewModel = viewModel(), cvm: CatalogViewModel = viewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val catalogMessage by cvm.message.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val survey by vm.survey.collectAsStateWithLifecycle()
     val surveyBusy by vm.surveyBusy.collectAsStateWithLifecycle()
@@ -55,7 +57,7 @@ class MainActivity: ComponentActivity() {
     val locationPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed -> if(allowed) vm.refreshWeather() else vm.message("위치 없이 기본 상황으로 추천합니다") }
     val rules by vm.rules.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
-    BackHandler(enabled=(survey?.completed==true) && ui.page!="홈" && !ui.driving) { vm.page("홈") }
+    BackHandler(enabled=(survey?.completed==true) && ui.page!="홈" && !ui.driving) { vm.page(if(ui.page.startsWith("설정/")) "설정" else "홈") }
     val snackbar = remember { SnackbarHostState() }
     var deleteWhat by remember { mutableStateOf<String?>(null) }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -64,6 +66,7 @@ class MainActivity: ComponentActivity() {
     val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result -> vm.consentResult(result.data) }
     LaunchedEffect(ui.consent) { ui.consent?.let { consent.launch(IntentSenderRequest.Builder(it).build()) } }
     LaunchedEffect(ui.message) { ui.message?.let { snackbar.showSnackbar(it); vm.message(null) } }
+    LaunchedEffect(catalogMessage) { catalogMessage?.let { snackbar.showSnackbar(it); cvm.message(null) } }
     Scaffold(containerColor=DriveColors.Carbon, snackbarHost={ SnackbarHost(snackbar) }, bottomBar={
         if((survey?.completed==true) && !ui.driving) NavigationBar(containerColor=DriveColors.Carbon) {
             listOf("홈" to Icons.Outlined.Home,"탐색" to Icons.Outlined.Explore,"에이전트" to Icons.Outlined.AutoAwesome).forEach { (name, icon) ->
@@ -122,29 +125,24 @@ class MainActivity: ComponentActivity() {
                     item { Text("규칙은 기기에서 해석합니다. ‘잔잔하게’는 곡의 장르 정보로만 추정하므로, 장르를 알 수 없는 곡은 선곡에서 빠집니다.",fontSize=12.sp,lineHeight=20.sp,color=DriveColors.Muted) }
                 }
                 "설정" -> {
-                    item { Title("나에게 맞게.","연결과 개인정보를 직접 관리하세요") }
+                    // v2.3 §24: summary rows first; every detail lives one level down.
+                    item { SettingsHome(vm,cvm,settings,survey?.aiConsent==true,ui.weatherLabel,diagnostic.hasMediaId,onOpen={ vm.page(it) }) { permissions.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.POST_NOTIFICATIONS)) } }
+                }
+                "설정/음악 서비스" -> item { MusicServiceDetail(vm,cvm,settings,ui.driving) }
+                "설정/재생" -> item { PlaybackDetail(diagnostic.state.toString(),diagnostic.hasMediaId,diagnostic.positionMs) { appContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } }
+                "설정/AI" -> item { AiDetail(vm.aiConfigured,survey?.aiConsent==true,vm::surveyConsent) { vm.message("app/google-services.json 과 모델 ID를 설정한 빌드에서 AI 추천을 사용할 수 있어요") } }
+                "설정/위치" -> item { GlassSurface { SettingsTitle("위치와 날씨","대략 위치로 지역 날씨만 확인합니다"); Text(ui.weatherLabel,fontSize=16.sp,lineHeight=24.sp); Text(if(vm.weatherConfigured) "날씨 서비스 연결됨 · 기상청 격자 실황" else "날씨 서비스 설정 필요 · 위치 없이도 추천은 동작해요",fontSize=14.sp,lineHeight=20.sp,color=DriveColors.Muted); DriveButton("현재 위치로 날씨 갱신",!ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } } }
+                "설정/장소" -> item { PlacesDetail({deleteWhat="home"},{deleteWhat="work"},{deleteWhat="zones"},ui.driving) }
+                "설정/수집" -> item { CollectionDetail(cvm,ui.driving) }
+                "설정/차량" -> {
+                    item { SettingsTitle("차량 연결","연결되면 조용한 알림으로 시작합니다") }
                     item { GlassSurface {
                         Toggle("데모 모드","샘플 곡으로 기능 둘러보기",ui.demo,vm::demo)
                         Toggle("차량 연결 알림","차량 연결 시 조용한 알림으로 시작",settings.auto) { value -> vm.auto(value); if(value) permissions.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.POST_NOTIFICATIONS)) }
-                        Text("자동 재생은 아직 지원하지 않습니다. 연결 알림을 누른 뒤 음악을 선택해 주세요.",fontSize=12.sp,color=DriveColors.Muted,lineHeight=20.sp)
+                        Text("자동 재생은 아직 지원하지 않습니다. 연결 알림을 누른 뒤 음악을 선택해 주세요.",fontSize=14.sp,color=DriveColors.Muted,lineHeight=20.sp)
                     } }
                     item { VehicleSettings(vm,settings) { permissions.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT)) } }
                     item { ConnectionSettings(vm,settings) }
-                    item { GlassSurface {
-                        Text("재생 연동 L0 · 열기 전용")
-                        Text("관측 진단: ${diagnostic.state} · ID 제공 ${diagnostic.hasMediaId} · 위치 ${diagnostic.positionMs?.let { "${it}ms" }?:"미상"}")
-                        Text("관측 권한은 선택 사항이며, 진단 결과만 표시합니다. 곡 식별·종료 원인의 실기기 검증 전에는 자동 청취 학습을 하지 않습니다.")
-                        TextButton(onClick={appContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))}) {Text("재생 관측 권한 관리")}
-                        Text("Gemini · ${if(vm.aiConfigured) "빌드 설정 있음" else "프로젝트 / 모델 미설정"}")
-                        Toggle("Gemini 추천 사용","답변, 후보 곡, 요약 반응을 Google에 전송합니다. 좌표·토큰은 제외합니다.",survey?.aiConsent==true,vm::surveyConsent)
-                        Text("위치와 날씨 · ${if(vm.weatherConfigured) "날씨 키 설정 있음" else "날씨 키 미설정"}")
-                        Text(ui.weatherLabel)
-                        TextButton(onClick={locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION)}) {Text("현재 위치로 날씨 갱신")}
-                        TextButton(onClick={deleteWhat="home"}) {Text("현재 위치를 집 영역으로 등록")}
-                        TextButton(onClick={deleteWhat="work"}) {Text("현재 위치를 회사 영역으로 등록")}
-                        TextButton(onClick={deleteWhat="zones"}) {Text("등록 영역 삭제")}
-                    } }
-                    item { GlassSurface { SettingsLink("개인정보",Icons.Outlined.Shield) {vm.page("개인정보")}; SettingsLink("추천 기록",Icons.Outlined.History) {vm.page("기록")}; SettingsLink("권한 요청",Icons.Outlined.Notifications) {permissions.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.POST_NOTIFICATIONS))} } }
                 }
                 "개인정보" -> {
                     item { Title("취향은 기억하고,\n위치는 남기지 않아요.","저장하는 데이터와 연결을 한눈에") }
