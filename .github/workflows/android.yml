@@ -7,6 +7,8 @@ jobs:
       ORG_GRADLE_PROJECT_ytApiKey: ${{ secrets.YT_API_KEY }}
       ORG_GRADLE_PROJECT_weatherApiKey: ${{ secrets.WEATHER_API_KEY }}
       ORG_GRADLE_PROJECT_geminiModel: ${{ vars.GEMINI_MODEL }}
+      ORG_GRADLE_PROJECT_drivemuseStorePassword: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+      ORG_GRADLE_PROJECT_drivemuseKeyPassword: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -20,6 +22,16 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;35.0.0' 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Optional stable debug keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > drivemuse.keystore
+            echo "Using the stable debug keystore from secrets."
+          else
+            echo "No DEBUG_KEYSTORE_B64 secret; falling back to the runner's generated debug key."
+          fi
       - name: Optional Firebase configuration
         env:
           FIREBASE_CONFIG: ${{ secrets.GOOGLE_SERVICES_JSON }}

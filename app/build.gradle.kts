@@ -10,6 +10,17 @@ android {
         buildConfigField("String", "GEMINI_MODEL", quoted(providers.gradleProperty("geminiModel").orNull ?: ""))
         buildConfigField("String", "WEATHER_API_KEY", quoted(providers.gradleProperty("weatherApiKey").orNull ?: ""))
     }
+    // Stable debug signature so one OAuth SHA-1 registration keeps working across CI builds.
+    // The keystore never lives in the repo: CI writes it from a secret, local builds fall back to ~/.android/debug.keystore.
+    val ksFile = rootProject.file("drivemuse.keystore")
+    if (ksFile.exists()) {
+        signingConfigs.getByName("debug") {
+            storeFile = ksFile
+            storePassword = providers.gradleProperty("drivemuseStorePassword").orNull ?: "drivemuse"
+            keyAlias = providers.gradleProperty("drivemuseKeyAlias").orNull ?: "drivemuse"
+            keyPassword = providers.gradleProperty("drivemuseKeyPassword").orNull ?: "drivemuse"
+        }
+    }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
