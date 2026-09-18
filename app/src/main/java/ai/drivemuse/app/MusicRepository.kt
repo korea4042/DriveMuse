@@ -108,7 +108,11 @@ class MusicRepository(
         !VideoForm.isBroadcastOrStage(v.title, v.channel)
     /** Among surviving refs, prefer the audio upload over an MV over anything unlabelled (§30). */
     private fun preferAudio(rows: List<RawVideo>) = rows.sortedByDescending { VideoForm.audioPreference(it.title, it.channel) }
-    /** The same filter applied to stored rows, so an older pool cannot keep serving stage cuts. */
+    /**
+     * The same filter applied to stored rows, so an older pool cannot keep serving stage cuts.
+     * Music videos are excluded too, which means a song that only exists as an MV on YouTube will
+     * not be recommended until an audio ref for it turns up.
+     */
     private fun usable(rows: List<CandidateEntity>) = rows.filterNot { VideoForm.isBroadcastOrStage(it.title, it.artist) }
 
     private fun row(v: RawVideo, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(

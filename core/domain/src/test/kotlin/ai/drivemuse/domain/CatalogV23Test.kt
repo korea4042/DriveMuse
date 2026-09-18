@@ -191,7 +191,15 @@ class VideoFormTest {
     @Test fun studioUploadsSurvive() {
         assertTrue(!VideoForm.isBroadcastOrStage("아티스트 - 곡 (Official Audio)"))
         assertTrue(!VideoForm.isBroadcastOrStage("아티스트 - 곡", "아티스트 - Topic"))
-        assertTrue(!VideoForm.isBroadcastOrStage("Artist - Song (Official Music Video)"))
+        assertTrue(!VideoForm.isBroadcastOrStage("Artist - Song"))
+    }
+    @Test fun musicVideosAreExcluded() {
+        assertTrue(VideoForm.isMusicVideo("Artist - Song (Official Music Video)"))
+        assertTrue(VideoForm.isMusicVideo("아티스트 - 곡 M/V"))
+        assertTrue(VideoForm.isMusicVideo("아티스트 - 곡 뮤비"))
+        assertTrue(VideoForm.isBroadcastOrStage("Artist - Song (Official Video)"))
+        // An auto-generated audio channel keeps its upload even when the title mentions a video.
+        assertTrue(!VideoForm.isMusicVideo("Song (From the Music Video)", "Artist - Topic"))
     }
     @Test fun topicChannelOutranksOfficialTitleAndMv() {
         val topic = VideoForm.audioPreference("곡", "아티스트 - Topic")
@@ -206,6 +214,6 @@ class RankPenaltyTest {
     @Test fun audioUploadsOutrankMusicVideos() {
         assertEquals(0.0, VideoForm.rankPenalty("곡 (Official Audio)", "아티스트"))
         assertEquals(0.0, VideoForm.rankPenalty("곡", "아티스트 - Topic"))
-        assertTrue(VideoForm.rankPenalty("곡 (Official M/V)", "아티스트") > VideoForm.rankPenalty("곡 (Lyric Video)", "아티스트"))
+        assertTrue(VideoForm.rankPenalty("곡", "아티스트") > VideoForm.rankPenalty("곡 (Lyric Video)", "아티스트"))
     }
 }

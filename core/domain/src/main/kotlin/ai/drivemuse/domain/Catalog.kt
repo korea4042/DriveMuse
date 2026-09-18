@@ -198,6 +198,7 @@ object VideoForm {
     fun isBroadcastOrStage(title: String, channel: String = ""): Boolean {
         val text = "$title $channel"
         if (broadcast.containsMatchIn(text) || longForm.containsMatchIn(text)) return true
+        if (isMusicVideo(title, channel)) return true
         // "Live" alone is ambiguous (a studio live session is still one recording), so it only
         // counts together with a venue or broadcast word, which the regex above already covers.
         return liveHint.containsMatchIn(title) && broadcast.containsMatchIn(text)
@@ -208,16 +209,20 @@ object VideoForm {
      * channel is YouTube's own audio upload, so it outranks a title that merely says "official".
      */
     /**
-     * How much to hold a ref back when it is playable but not the plain audio rendition. A music
-     * video still carries the recording, so it is ranked below an audio upload rather than dropped —
-     * dropping it would leave songs that only exist as an MV unreachable.
+     * How much to hold a ref back when it is playable but not the plain audio rendition. Music videos
+     * are excluded outright (see musicVideo), so what is left to rank is an unlabelled upload against
+     * a labelled audio one.
      */
     fun rankPenalty(title: String, channel: String): Double = when (audioPreference(title, channel)) {
         4, 3 -> 0.0
         1 -> .10   // lyric video: audio is intact, visuals are not the point
-        2 -> .18   // official MV
         else -> .12   // unlabelled upload: form unknown
     }
+
+    private val mvMarker = Regex("\\bm/?v\\b|music ?video|뮤직\\s*비디오|뮤비|official ?video|\\bperformance ?(video|clip)\\b", RegexOption.IGNORE_CASE)
+    /** A music video is a different rendition of the song; the user asked for the audio one. */
+    fun isMusicVideo(title: String, channel: String = ""): Boolean =
+        mvMarker.containsMatchIn(title) && !channel.trimEnd().endsWith("- Topic")
 
     fun audioPreference(title: String, channel: String): Int = when {
         channel.trimEnd().endsWith("- Topic") -> 4
