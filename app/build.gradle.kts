@@ -10,8 +10,8 @@ android {
         buildConfigField("String", "GEMINI_MODEL", quoted(providers.gradleProperty("geminiModel").orNull ?: ""))
         buildConfigField("String", "WEATHER_API_KEY", quoted(providers.gradleProperty("weatherApiKey").orNull ?: ""))
     }
-    // Stable debug signature so one OAuth SHA-1 registration keeps working across CI builds.
-    // The keystore never lives in the repo: CI writes it from a secret, local builds fall back to ~/.android/debug.keystore.
+    // Stable debug signature so one OAuth SHA-1 registration keeps working across CI and local builds.
+    // drivemuse.keystore is a throwaway TEST key committed on purpose; never ship a release signed with it.
     val ksFile = rootProject.file("drivemuse.keystore")
     if (ksFile.exists()) {
         signingConfigs.getByName("debug") {

@@ -8,7 +8,9 @@ local.properties
 __pycache__/
 *.jks
 *.keystore
+!drivemuse.keystore
 
 app/google-services.json
 *.jks
 *.keystore
+!drivemuse.keystore

@@ -20,24 +20,6 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;35.0.0' 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Optional stable debug keystore
-        env:
-          KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
-        run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "No DEBUG_KEYSTORE_B64 secret; falling back to the runner's generated debug key."
-            exit 0
-          fi
-          printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > drivemuse.keystore
-          echo "decoded bytes: $(stat -c%s drivemuse.keystore)"
-          if keytool -list -keystore drivemuse.keystore -alias drivemuse -storepass drivemuse > /dev/null 2>&1; then
-            keytool -list -v -keystore drivemuse.keystore -alias drivemuse -storepass drivemuse | grep 'SHA1:'
-            echo "Using the stable debug keystore from secrets."
-          else
-            echo "::error::DEBUG_KEYSTORE_B64 did not decode into a readable keystore. Re-copy the single-line base64 value."
-            keytool -list -keystore drivemuse.keystore -alias drivemuse -storepass drivemuse || true
-            exit 1
-          fi
       - name: Optional Firebase configuration
         env:
           FIREBASE_CONFIG: ${{ secrets.GOOGLE_SERVICES_JSON }}
