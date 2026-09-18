@@ -25,7 +25,7 @@ data class UiState(
     val queue: List<Track> = emptyList(), val busy: Boolean = false, val message: String? = null,
     val driving: Boolean = false, val pendingRule: MusicRule? = null,
     val connection: String = "미연결", val reason: String = "좋아하는 음악과 새로운 발견 사이",
-    val engineLabel: String = "초기 취향 · L0 열기 전용", val weatherLabel: String = "날씨 정보 없음", val consent: android.app.PendingIntent? = null
+    val engineLabel: String = "초기 취향 · Spotify 재생", val weatherLabel: String = "날씨 정보 없음", val consent: android.app.PendingIntent? = null
 )
 class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val prefs = Preferences(application)
@@ -37,7 +37,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val gateway=RoleGateway(application,intelligence,{ runtime.secrets(ProviderId.FIREBASE_AI) },{ runtime.secrets(ProviderId.GEMINI_DIRECT) })
     private val engine=RecommendationEngine(gateway)
     private val coordinator=QueueCoordinator(db)
-    private val playback=YouTubeMusicAdapter(application)
     private val learning=LearningStore(db)
     private val location=LocationAdapter(application)
     private val weather=WeatherRepository { runtime.secret(ProviderId.WEATHER,"apiKey") ?: "" }
@@ -79,7 +78,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         viewModelScope.launch {
             dao.prune(System.currentTimeMillis()-2592000000L);learning.prune(System.currentTimeMillis())
             val d=surveyStore.load();draftMutable.value=d
-            if(d.completed) { val restored=coordinator.restore(d.revision);mutable.update { it.copy(queue=restored,engineLabel="저장된 추천 · L0 열기 전용") } }
+            if(d.completed) { val restored=coordinator.restore(d.revision);mutable.update { it.copy(queue=restored,engineLabel="저장된 추천 · Spotify 재생") } }
         }
     }
     private fun changeSurvey(transform: (SurveyDraft)->SurveyDraft) {

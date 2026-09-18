@@ -106,7 +106,7 @@ class MainActivity: ComponentActivity() {
             item { Row(verticalAlignment=Alignment.CenterVertically) { Box(Modifier.weight(1f)) { Brand() }; IconButton(onClick={ vm.page("설정") },enabled=!ui.driving) { Icon(Icons.Outlined.Settings,"설정",tint=DriveColors.Muted) } } }
             if (ui.driving) {
                 item { Title("지금은, 음악과 길에만.","운전 모드 · 설정과 입력을 잠시 숨겼어요") }
-                item { GlassSurface { AgentOrb(active=false); Text("사용자 선택 유지 중",fontSize=24.sp); Text("음악 조작은 YouTube Music 또는 차량 화면에서 이용하세요.",color=DriveColors.Muted); DriveButton("YouTube Music 열기") { vm.handoff(null) } } }
+                item { GlassSurface { AgentOrb(active=false); Text("사용자 선택 유지 중",fontSize=24.sp); Text("음악 조작은 Spotify 또는 차량 화면에서 이용하세요.",color=DriveColors.Muted) } }
                 item { OutlinedButton(onClick={ vm.driving(false) },modifier=Modifier.fillMaxWidth().heightIn(min=56.dp)) { Text("정차했어요 · 운전 모드 종료") } }
             } else when(ui.page) {
                 "홈" -> {
@@ -118,11 +118,11 @@ class MainActivity: ComponentActivity() {
                         Text(ui.context.mix,fontSize=34.sp,fontWeight=FontWeight.Bold,letterSpacing=(-1).sp)
                         Text(when(ui.context) { DriveContext.COMMUTE_HOME -> "하루의 속도를, 조금 천천히."; DriveContext.COMMUTE_TO_WORK -> "기분 좋은 시작을 위한 리듬."; DriveContext.TRAVEL -> "익숙한 길 너머, 새로운 음악."; else -> "지금 이 순간에 어울리는 사운드." },color=DriveColors.Muted)
                         Text(ui.reason,fontSize=12.sp,color=DriveColors.Muted,lineHeight=19.sp)
-                        DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else "YouTube Music에서 열기",!ui.busy) {
+                        DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else "Spotify에서 재생",!ui.busy) {
                             if(ui.queue.isEmpty()) vm.recommend() else if(ui.demo) vm.message("샘플 곡입니다. 설정에서 데모 모드를 끄고 Google 계정을 연결해 주세요") else vm.handoff(ui.queue.first())
                         }
                         if(ui.queue.isNotEmpty()) TextButton(onClick={ vm.recommend() },modifier=Modifier.fillMaxWidth()) { Text("다른 믹스 고르기") }
-                        Text("음악 재생과 차량 디스플레이는 YouTube Music이 담당해요.",fontSize=11.sp,color=DriveColors.Muted)
+                        Text("재생과 차량 디스플레이는 Spotify가 담당해요.",fontSize=11.sp,color=DriveColors.Muted)
                     } }
                     item { GlassSurface { Row(verticalAlignment=Alignment.CenterVertically) { AgentOrb(active=settings.suspendedUntil<System.currentTimeMillis()); Column(Modifier.weight(1f).padding(start=14.dp)) { Text(if(settings.suspendedUntil>System.currentTimeMillis()) "사용자 선택 유지 중" else "당신의 뮤직 에이전트",fontWeight=FontWeight.SemiBold); Text(ui.engineLabel,color=DriveColors.Muted,fontSize=12.sp) }; IconButton(onClick={ vm.page("에이전트") }) { Icon(Icons.Outlined.ChevronRight,"에이전트 설정") } }; Text(ui.connection,fontSize=12.sp,color=DriveColors.Cyan) } }
                     if(ui.queue.isNotEmpty()) { item { Section("이번 드라이브의 음악", "${ui.queue.size}곡") }; items(ui.queue,key={it.id}) { track -> Column { TrackRow(track,ui.demo) { if(ui.demo) vm.message("데모 곡은 재생할 수 없습니다") else vm.handoff(track) };if(!ui.demo) Row { TextButton(onClick={vm.rate(track,true)}) {Text("좋아요")};TextButton(onClick={vm.rate(track,false)}) {Text("싫어요")} } } } }
@@ -176,7 +176,7 @@ class MainActivity: ComponentActivity() {
                 }
                 "개인정보" -> {
                     item { Title("취향은 기억하고,\n위치는 남기지 않아요.","저장하는 데이터와 연결을 한눈에") }
-                    item { GlassSurface { ContextPill("원시 이동 경로 저장 없음"); Text("위치 · 주소",fontWeight=FontWeight.Bold); Text("대략 위치는 선택 사항이며 전경에서 요청할 때만 조회합니다. 현재 좌표는 영역·격자로 변환 후 폐기합니다. 집·회사 영역은 기기에 암호화 저장합니다.",color=DriveColors.Muted); Text("추천 기록 · 30일",fontWeight=FontWeight.Bold); Text("기기 내부에만 저장하며 앱 시작 시 만료 기록을 정리합니다.",color=DriveColors.Muted); Text("계정 연결",fontWeight=FontWeight.Bold); Text("Google 인증은 기기에서만 이뤄지고, 액세스 토큰은 저장하지 않고 메모리에만 둡니다. 권한은 읽기 전용입니다.",color=DriveColors.Muted); Text("외부 전송",fontWeight=FontWeight.Bold); Text("YouTube에 검색·조회 요청, 날씨 제공자에 지역 격자를 전송합니다. Gemini 사용 동의 시 설문·후보·요약 반응을 Google에 전송합니다. 계정 토큰과 좌표는 AI에 보내지 않습니다.",color=DriveColors.Muted); Text("후보 곡 캐시 · 30일",fontWeight=FontWeight.Bold); Text("조회한 곡 정보는 기기에 저장하고 30일이 지나면 삭제합니다.",color=DriveColors.Muted) } }
+                    item { GlassSurface { ContextPill("원시 이동 경로 저장 없음"); Text("위치 · 주소",fontWeight=FontWeight.Bold); Text("대략 위치는 선택 사항이며 전경에서 요청할 때만 조회합니다. 현재 좌표는 영역·격자로 변환 후 폐기합니다. 집·회사 영역은 기기에 암호화 저장합니다.",color=DriveColors.Muted); Text("추천 기록 · 30일",fontWeight=FontWeight.Bold); Text("기기 내부에만 저장하며 앱 시작 시 만료 기록을 정리합니다.",color=DriveColors.Muted); Text("계정 연결",fontWeight=FontWeight.Bold); Text("Spotify 인증은 기기에서만 이뤄집니다. 갱신 토큰은 암호화 저장하고, 권한은 라이브러리 읽기와 재생 제어로 한정합니다.",color=DriveColors.Muted); Text("외부 전송",fontWeight=FontWeight.Bold); Text("Spotify에 검색·라이브러리 조회와 재생 명령, 날씨 제공자에 지역 격자를 전송합니다. Gemini 사용 동의 시 설문·후보·요약 반응을 Google에 전송합니다. 계정 토큰과 좌표는 AI에 보내지 않습니다.",color=DriveColors.Muted); Text("후보 곡 캐시 · 30일",fontWeight=FontWeight.Bold); Text("조회한 곡 정보는 기기에 저장하고 30일이 지나면 삭제합니다.",color=DriveColors.Muted) } }
                     item { OutlinedButton(onClick={deleteWhat="history"},modifier=Modifier.fillMaxWidth()) { Text("추천 기록 삭제") }; OutlinedButton(onClick={deleteWhat="disconnect"},modifier=Modifier.fillMaxWidth()) { Text("음악 연결 해제") }; TextButton(onClick={deleteWhat="all"},modifier=Modifier.fillMaxWidth()) { Text("앱 데이터 초기화",color=Color(0xFFFF6B6B)) } }
                 }
                 "기록" -> {
