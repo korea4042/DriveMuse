@@ -58,10 +58,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     val aiConfigured get()=gateway.configured
     val weatherConfigured get()=weather.configured
     val analysis=intelligence.observeState("survey_analysis").stateIn(viewModelScope,SharingStarted.Eagerly,null)
-    private val tokens = runtime.tokens
-    private val auth = YouTubeAuth(application)
-    private val api = runtime.youtube   // v2.3 §22: key comes from the encrypted runtime config, BuildConfig only as default
-    private val repository = MusicRepository(api, dao, prefs)
+    // v2.3 §3, Spotify edition: the pool and playback come from one provider that identifies
+    // recordings, so there is no video-to-song matching left to get wrong.
+    private val repository = MusicRepository(runtime.spotify, dao, prefs)
     val settings = prefs.flow.stateIn(viewModelScope,SharingStarted.Eagerly,Settings())
     val rules = dao.rules().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
     val history = dao.history().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
@@ -71,9 +70,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private var accountJob: Job? = null
     private var selectionGeneration = 0
     /** Live check against the runtime config (T14: no rebuild needed after entering a key). */
-    val apiKeyConfigured get() = runtime.secret(ProviderId.YOUTUBE, "apiKey")?.isNotBlank() == true
-    /** §22: a linked Google account authorizes public reads, so either path is enough to query YouTube. */
-    val youtubeUsable get() = apiKeyConfigured || settings.value.accountLinked
+    val spotifyLinked get() = runtime.spotifyAuth.linked
 
     init {
         viewModelScope.launch {
@@ -148,38 +145,22 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();viewModelScope.launch { coordinator.invalidate();prefs.ratio(value) } }
     fun choose(context: DriveContext) { if (ui.value.driving) return; suspendAgent();contextVersion++;mutable.update { it.copy(context=context) }; recommend() }
 
-    /**
-     * §8.5 — consent UI never appears while driving, so a silent grant is attempted and a
-     * required consent screen is deferred to the phone instead.
-     */
+    /** §8.5 — sign-in never appears while driving; Spotify consent runs in the browser when parked. */
     fun linkAccount(interactive: Boolean = true) {
-        if (ui.value.driving) { message("계정 연결은 정차 후 진행해 주세요"); return }
-        accountJob?.cancel();accountJob=viewModelScope.launch {
-            when (val state = auth.authorize()) {
-                is AuthState.Authorized -> onAuthorized(state.token)
-                is AuthState.NeedsConsent -> if (interactive) mutable.update { it.copy(consent = state.pendingIntent) } else message("Google 계정 연결을 다시 확인해 주세요")
-                AuthState.Unavailable -> message("Google 계정 연결을 시작할 수 없습니다. Play 서비스와 네트워크를 확인해 주세요")
-            }
-        }
+        message("설정 화면의 Spotify 연결을 사용해 주세요")
     }
-    fun consentResult(data: Intent?) {
-        mutable.update { it.copy(consent = null) }
-        accountJob?.cancel();accountJob=viewModelScope.launch {
-            when (val state = auth.fromIntent(data)) {
-                is AuthState.Authorized -> onAuthorized(state.token)
-                else -> message("계정 연결이 취소되었습니다")
-            }
+
+    /** Called after the Spotify redirect so the pool is built from the account straight away. */
+    fun onSpotifyLinked() {
+        cancelSelection()
+        viewModelScope.launch {
+            coordinator.invalidate()
+            mutable.update { it.copy(demo = false, connection = "Spotify 연결됨") }
+            message("연결했습니다. 저장한 곡과 자주 듣는 곡을 불러오는 중이에요")
+            runCatching { repository.refresh(settings.value) }
+                .onSuccess { message("취향을 불러왔습니다") }
+                .onFailure { message(explain(it)) }
         }
-    }
-    private suspend fun onAuthorized(token: String) {
-        cancelSelection();coordinator.invalidate()
-        tokens.put(token)
-        prefs.flag("accountLinked", true)
-        mutable.update { it.copy(demo=false, connection="Google 계정 연결됨") }
-        message("연결했습니다. 좋아요와 구독을 불러오는 중이에요")
-        runCatching { repository.refresh(settings.value.copy(accountLinked = true)) }
-            .onSuccess { message("취향을 불러왔습니다") }
-            .onFailure { message(explain(it)) }
     }
 
     fun recommend() {
@@ -197,9 +178,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val ruleSnapshot = dao.rules().first().map { it.domain() }
                 val effective = RuleEngine.resolve(ruleSnapshot,snapshot.context,config.ratio.toDouble())
                 val tracks = if(snapshot.demo) DemoTracks else {
-                    check(youtubeUsable) { "설정에서 Google 계정을 연결하거나 YouTube Data API 키를 입력해 주세요" }
-                    // A silent token top-up: the linked account may simply have an expired token.
-                    if (config.accountLinked && tokens.current() == null) linkAccountSilently()
+                    check(spotifyLinked) { "설정에서 Spotify 계정을 연결해 주세요" }
                     if(seedRevision!=revision) {
                         try { repository.addSurveyCandidates(draft.answers);seedRevision=revision } catch(e: CancellationException) { throw e } catch(_: Exception) { /* Existing pool remains usable. */ }
                     }
@@ -230,51 +209,40 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             finally { if(generation == selectionGeneration) mutable.update { it.copy(busy=false) } }
         }
     }
-    private suspend fun linkAccountSilently() {
-        when (val state = auth.authorize()) {
-            is AuthState.Authorized -> tokens.put(state.token)
-            // Deferred, per §6.8: degrade to public data rather than interrupting.
-            else -> Unit
-        }
-    }
-
     /** §6.8 — every failure has one recovery path and only re-auth is worth surfacing. */
     private fun explain(e: Throwable): String = when (e) {
         is QuotaExceededException -> "오늘의 조회 한도를 모두 사용했습니다. 저장된 후보로 계속 재생할 수 있어요"
-        is AuthExpiredException, is UserAuthRequiredException -> "Google 계정 연결을 다시 확인해 주세요"
+        is ai.drivemuse.app.spotify.SpotifyAuthRequired -> "Spotify 계정 연결을 다시 확인해 주세요"
+        is ai.drivemuse.app.spotify.SpotifyPremiumRequired -> "곡 지정 재생에는 Spotify Premium이 필요해요"
         is ApiNotConfiguredException -> e.message ?: "API 설정을 확인해 주세요"
         is IllegalStateException, is IllegalArgumentException -> e.message ?: "추천 실패"
         else -> "연결할 수 없습니다. 기존 음악은 그대로 유지합니다"
     }
     private fun connectionLabel(s: Settings) = when {
-        !apiKeyConfigured && !s.accountLinked -> "연결 필요 · 계정 또는 API 키"
-        s.accountLinked -> "Google 계정 연결됨 · 읽기 전용"
-        else -> "계정 미연결 · 인기 음악만 사용"
+        !spotifyLinked -> "Spotify 미연결"
+        runtime.spotifyRemote.connected -> "Spotify 연결됨 · 재생 제어"
+        else -> "Spotify 연결됨"
     }
 
     private fun cancelSelection() { selectionGeneration++; selectionJob?.cancel(); selectionJob=null; mutable.update { it.copy(busy=false) } }
     fun suspendAgent() { cancelSelection(); viewModelScope.launch { coordinator.invalidate();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
 
-    /** Handoff is exposure only. It never creates a listening outcome. */
+    /** §30: play the exact recording through App Remote and queue the rest of the batch. */
     fun handoff(track: Track?) {
         suspendAgent()
-        if(track!=null && !Constraints(excludedGenres=profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다");return }
-        // §30 Spotify: a linked account can play the exact recording, so it is tried before the
-        // YouTube handoff. A failure falls back rather than leaving the user with nothing.
-        if (track != null && runtime.spotifyAuth.linked) {
-            viewModelScope.launch {
-                val result = runtime.spotifyPlayback.play(track)
-                if (result.ok) {
-                    message(result.message)
-                    if (!ui.value.demo) { repository.recordPlay(track.id); runCatching { runtime.spotifyPlayback.queue(ui.value.queue.filter { it.id != track.id }) } }
-                } else message(result.message + " · YouTube로 엽니다: " + playback.open(track))
+        if (track == null) { message("재생할 곡이 없습니다"); return }
+        if (!Constraints(excludedGenres = profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다"); return }
+        viewModelScope.launch {
+            val failure = runtime.spotifyRemote.connect(getApplication())
+            if (failure != null) { message(failure); return@launch }
+            if (!runtime.spotifyRemote.play(track.id)) { message("Spotify 재생을 시작하지 못했어요"); return@launch }
+            message("${track.artist} ${track.title} 재생 중")
+            // Exposure only (§17 EXPOSED_ONLY); a listening outcome needs observed playback.
+            if (!ui.value.demo) {
+                repository.recordPlay(track.id)
+                ui.value.queue.filter { it.id != track.id }.forEach { runtime.spotifyRemote.queue(it.id) }
             }
-            return
         }
-        val result = playback.open(track)
-        // Exposure only (§17 EXPOSED_ONLY): counted for fatigue and novelty, never as listening.
-        if (track != null && !ui.value.demo) viewModelScope.launch { repository.recordPlay(track.id); db.catalog().ref("youtube",track.id)?.trackId?.let { db.catalog().recordExposure("default",it,System.currentTimeMillis(),runtime.historyCoverageSince()) } }
-        message(result)
     }
 
     fun parseRule(text: String) {
@@ -296,16 +264,16 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if(ui.value.driving) return
         cancelSelection();accountJob?.cancel()
         viewModelScope.launch {
-            coordinator.invalidate();tokens.clear(); repository.clearCache()
+            coordinator.invalidate(); runtime.spotifyAuth.signOut(); runtime.spotifyRemote.disconnect(); repository.clearCache()
             prefs.flag("accountLinked", false); prefs.long("tasteSyncedAt", 0)
             mutable.update { it.copy(connection="미연결",queue=emptyList()) }
-            message("이 기기의 연결과 후보 목록을 삭제했습니다. 접근 권한 자체는 Google 계정 설정에서 해제해 주세요")
+            message("이 기기의 연결과 후보 목록을 삭제했습니다. 앱 접근 권한은 Spotify 계정 설정에서도 해제할 수 있어요")
         }
     }
     fun clearHistory() { if(ui.value.driving) return;resetLearning();viewModelScope.launch { dao.clearHistory();dao.clearPlayed();message("추천 기록과 관련 학습 기여분을 삭제했습니다") } }
     fun resetAll() {
         if(ui.value.driving) return
         cancelSelection();accountJob?.cancel();surveyJob?.cancel();contextJob?.cancel();engine.clearCache()
-        edits.trySend { coordinator.invalidate();tokens.clear();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearState();prefs.clear();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() }
+        edits.trySend { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearState();prefs.clear();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() }
     }
 }

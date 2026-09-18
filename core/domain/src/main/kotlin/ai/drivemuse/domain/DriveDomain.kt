@@ -75,7 +75,8 @@ object Quota {
 object Policy {
     /** v1 requests youtube.readonly only. Write scopes are requested per feature, never at onboarding. */
     const val SCOPE_READONLY = "https://www.googleapis.com/auth/youtube.readonly"
-    fun validTrackId(id: String) = Regex("[A-Za-z0-9_-]{11}").matches(id)
+    /** Provider track ids: a Spotify id is 22 base62 characters, an older YouTube id is 11. */
+    fun validTrackId(id: String) = Regex("[A-Za-z0-9_-]{11,40}").matches(id)
     fun canAutoSelect(enabled: Boolean, connected: Boolean, confidence: Double, suspendedUntil: Long, now: Long) = enabled && connected && confidence >= .8 && now >= suspendedUntil
     /** Metadata eligibility only; category 10 does not guarantee YouTube Music playback. */
     fun playableTrack(categoryId: String?, live: String?, durationSec: Int) =

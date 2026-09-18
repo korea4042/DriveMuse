@@ -13,7 +13,7 @@ import kotlinx.coroutines.sync.withLock
  * the old MCP gateway inferred server-side now lives on the device.
  */
 class MusicRepository(
-    private val api: YouTubeApi,
+    private val spotify: ai.drivemuse.app.spotify.SpotifyApi,
     private val dao: DriveDao,
     private val prefs: Preferences
 ) {
@@ -27,7 +27,8 @@ class MusicRepository(
             if(!Quota.canSearch(used)) break
             if(!prefs.reserveSearch(today)) break
             val existing=dao.candidates(now-poolTtl).map { it.videoId }.toSet()
-            val results=preferAudio(api.searchMusic(phrase).filter { playable(it) && it.id !in existing }).map { row(it,false,.6,"survey_search",now) }
+            val results=runCatching { spotify.search(phrase, 20) }.getOrDefault(emptyList())
+                .filter { it.id !in existing }.map { row(it, familiar=false, affinity=.6, source="survey_search", now=now) }
             dao.putCandidates(results)
         }
     }
@@ -63,38 +64,23 @@ class MusicRepository(
     suspend fun refresh(settings: Settings) {
         val now = System.currentTimeMillis()
         val rows = mutableListOf<CandidateEntity>()
-        var likedArtists = emptySet<String>()
 
-        if (settings.accountLinked) {
-            runCatching {
-                val liked = api.videos(api.likedVideoIds(limit = 300))
-                likedArtists = liked.map { it.channel.removeSuffix(" - Topic") }.toSet()
-                rows += liked.filter { playable(it) }.map { row(it, familiar = true, affinity = .9, source = "liked", now = now) }
-            }.onFailure { if (it is AuthExpiredException || it is UserAuthRequiredException) throw it }
+        // Saved tracks and listening history are the account's own taste evidence (§17 KNOWN_PREFERENCE).
+        val saved = runCatching { spotify.savedTracks(50) }.getOrDefault(emptyList())
+        rows += saved.map { row(it, familiar = true, affinity = .9, source = "saved", now = now) }
+        val top = runCatching { spotify.topTracks(limit = 50) }.getOrDefault(emptyList())
+        rows += top.map { row(it, familiar = true, affinity = .85, source = "top", now = now) }
 
-            runCatching {
-                val subscribed = api.subscribedChannels().map { it.removeSuffix(" - Topic") }.toSet()
-                likedArtists = likedArtists + subscribed
-            }
-        }
+        val knownArtistIds = (saved + top).flatMap { it.artistIds }.toSet()
+        val knownTrackIds = rows.map { it.videoId }.toSet()
 
-        runCatching {
-            rows += api.popularMusic(settings.regionCode).filter { playable(it) }.map {
-                val known = it.channel.removeSuffix(" - Topic") in likedArtists
-                row(it, familiar = known, affinity = if (known) .75 else .35, source = "chart", now = now)
-            }
-        }
-
-        // §6.5 — search is 100 units, so it only runs when the pool is genuinely thin and the
-        // daily ceiling still allows it.
-        val today = now / 86_400_000
-        val callsToday = if (settings.quotaDay == today) settings.searchCalls else 0
-        if (rows.size < 60 && likedArtists.isNotEmpty() && Quota.canSearch(callsToday)) {
-            val seed = likedArtists.random()
-            runCatching {
-                check(prefs.reserveSearch(today)) { "Search quota reached" }
-                rows += preferAudio(api.searchMusic(seed).filter { playable(it) }).map { row(it, familiar = false, affinity = .55, source = "search", now = now) }
-            }
+        // Unheard tracks by artists the listener already has are the cheapest real discovery (§17 D01).
+        val seedArtists = runCatching { spotify.topArtistIds(limit = 10) }.getOrDefault(emptyList())
+            .ifEmpty { knownArtistIds.take(10) }
+        for (artistId in seedArtists.take(6)) {
+            val tracks = runCatching { spotify.artistTopTracks(artistId, settings.regionCode) }.getOrDefault(emptyList())
+            rows += tracks.filter { it.id !in knownTrackIds }
+                .map { row(it, familiar = false, affinity = .6, source = "artist_top", now = now) }
         }
 
         if (rows.isNotEmpty()) {
@@ -103,27 +89,21 @@ class MusicRepository(
         }
     }
 
-    // §27: a stage cut or broadcast clip is a different rendition, not the requested recording.
-    private fun playable(v: RawVideo) = Policy.playableTrack(v.categoryId, v.live, v.durationSec) && Policy.validTrackId(v.id) &&
-        !VideoForm.isBroadcastOrStage(v.title, v.channel)
-    /** Among surviving refs, prefer the audio upload over an MV over anything unlabelled (§30). */
-    private fun preferAudio(rows: List<RawVideo>) = rows.sortedByDescending { VideoForm.audioPreference(it.title, it.channel) }
     /**
-     * The same filter applied to stored rows, so an older pool cannot keep serving stage cuts.
-     * Music videos are excluded too, which means a song that only exists as an MV on YouTube will
-     * not be recommended until an audio ref for it turns up.
+     * Spotify serves recordings, not uploads, so there is no stage cut or music video to filter out.
+     * The filter stays for rows the YouTube-era pool left behind, which are dropped on sight.
      */
     private fun usable(rows: List<CandidateEntity>) = rows.filterNot { VideoForm.isBroadcastOrStage(it.title, it.artist) }
 
-    private fun row(v: RawVideo, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(
-        videoId = v.id,
-        // "Artist - Topic" channels are auto-generated art tracks; stripping the suffix gives a usable artist name.
-        title = v.title, artist = v.channel.removeSuffix(" - Topic"),
-        durationSec = v.durationSec, topics = v.topics.joinToString("|"),
+    private fun row(t: ai.drivemuse.app.spotify.SpotifyTrack, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(
+        videoId = t.id, title = t.name, artist = t.artists.joinToString(", "),
+        durationSec = (t.durationMs / 1000).toInt(), topics = "",
         familiar = familiar, affinity = affinity,
-        freshness = if (v.publishedYear >= java.time.Year.now().value - 2) .8 else .4,
-        energy = EnergyHints.estimate(v.topics),
-        source = source, fetchedAt = now, audioLanguage=v.audioLanguage
+        // A verified release date, unlike a YouTube upload time (§16 releaseRecency).
+        freshness = t.releaseDate?.take(4)?.toIntOrNull()?.let { if (it >= java.time.Year.now().value - 2) .8 else .4 } ?: .5,
+        // The API exposes no audio features here, so energy stays unknown rather than guessed (§31).
+        energy = null,
+        source = source, fetchedAt = now, audioLanguage = null
     )
 
     private suspend fun toTracks(rows: List<CandidateEntity>, context: DriveContext, now: Long): List<Track> {

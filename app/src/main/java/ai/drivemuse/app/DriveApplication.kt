@@ -9,8 +9,9 @@ class DriveApplication: Application() {
         val runtime=IntegrationRuntime.get(this)
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runtime.integrations.revalidateOnStart()
-            val control=runtime.db.catalog().control("default")
-            ai.drivemuse.app.discovery.MetadataSyncWorker.schedule(this@DriveApplication, control?.unmeteredOnly!=false, control?.autoEnabled!=false)
+            // Spotify supplies the pool directly, so the YouTube collection worker stays off and any
+            // periodic work left from an older install is cancelled.
+            ai.drivemuse.app.discovery.MetadataSyncWorker.schedule(this@DriveApplication, unmeteredOnly = true, enabled = false)
         }
     }
 }
