@@ -5,7 +5,7 @@ android {
     namespace = "ai.drivemuse.app"
     compileSdk = 36
     defaultConfig {
-        applicationId = "ai.drivemuse.app"; minSdk = 33; targetSdk = 35; versionCode = 14; versionName = "0.5.4"
+        applicationId = "ai.drivemuse.app"; minSdk = 33; targetSdk = 35; versionCode = 15; versionName = "0.6.0"
         buildConfigField("String", "YT_API_KEY", quoted(providers.gradleProperty("ytApiKey").orNull ?: ""))
         buildConfigField("String", "GEMINI_MODEL", quoted(providers.gradleProperty("geminiModel").orNull ?: ""))
         buildConfigField("String", "WEATHER_API_KEY", quoted(providers.gradleProperty("weatherApiKey").orNull ?: ""))
@@ -50,4 +50,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.2")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("com.google.android.gms:play-services-auth:21.3.0")
+    // Spotify App Remote ships as an AAR download rather than through Maven; gson is its transport.
+    implementation(files("libs/spotify-app-remote-release-0.8.0.aar"))
+    implementation("com.google.code.gson:gson:2.11.0")
 }

@@ -11,13 +11,22 @@ data class SpotifyPlayResult(val ok: Boolean, val message: String, val trackId: 
  * deliberately conservative: a wrong recording would be attributed to the wrong Track by the
  * learning path, so a weak match is reported rather than played.
  */
-class SpotifyPlayback(private val api: SpotifyApi) {
+class SpotifyPlayback(private val api: SpotifyApi, private val remote: SpotifyRemote? = null, private val context: android.content.Context? = null) {
 
+    /**
+     * App Remote first: it wakes the Spotify app, so the driver does not have to open anything.
+     * The Web API is the fallback for when App Remote cannot bind but a device is already awake.
+     */
     suspend fun play(track: Track): SpotifyPlayResult {
         val match = resolve(track) ?: return SpotifyPlayResult(false, "Spotify에서 같은 곡을 찾지 못했어요")
+        val label = "${match.artists.firstOrNull() ?: ""} ${match.name}".trim()
+        if (remote != null && context != null) {
+            val failure = remote.connect(context)
+            if (failure == null && remote.play(match.id)) return SpotifyPlayResult(true, "$label 재생 중", match.id)
+        }
         return try {
             api.play(match.id)
-            SpotifyPlayResult(true, "${match.artists.firstOrNull() ?: ""} ${match.name} 재생 중".trim(), match.id)
+            SpotifyPlayResult(true, "$label 재생 중", match.id)
         } catch (e: SpotifyPremiumRequired) { SpotifyPlayResult(false, e.message ?: "")
         } catch (e: SpotifyNoActiveDevice) { SpotifyPlayResult(false, e.message ?: "")
         } catch (e: SpotifyAuthRequired) { SpotifyPlayResult(false, e.message ?: "")
@@ -29,6 +38,7 @@ class SpotifyPlayback(private val api: SpotifyApi) {
         var queued = 0
         for (t in tracks) {
             val match = resolve(t) ?: continue
+            if (remote?.queue(match.id) == true) { queued++; continue }
             runCatching { api.queue(match.id) }.onSuccess { queued++ }
         }
         return queued
