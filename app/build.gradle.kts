@@ -1,6 +1,11 @@
 plugins { id("com.android.application"); kotlin("android"); id("org.jetbrains.kotlin.plugin.compose"); id("com.google.devtools.ksp") }
 if(file("google-services.json").exists()) apply(plugin="com.google.gms.google-services")
 fun quoted(value: String) = "\"" + value.replace("\\","\\\\").replace("\"","\\\"").replace("\n","\\n").replace("\r","\\r") + "\""
+// Build identity so an installed APK can be told apart from the previous one at a glance.
+val buildStampTime: String = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+    .withZone(java.time.ZoneId.of("Asia/Seoul")).format(java.time.Instant.now())
+val buildStampCommit: String = (System.getenv("GITHUB_SHA") ?: "").take(7).ifBlank { "local" }
+
 android {
     namespace = "ai.drivemuse.app"
     compileSdk = 36
@@ -9,12 +14,8 @@ android {
         buildConfigField("String", "YT_API_KEY", quoted(providers.gradleProperty("ytApiKey").orNull ?: ""))
         buildConfigField("String", "GEMINI_MODEL", quoted(providers.gradleProperty("geminiModel").orNull ?: ""))
         buildConfigField("String", "WEATHER_API_KEY", quoted(providers.gradleProperty("weatherApiKey").orNull ?: ""))
-        // Build identity so an installed APK can be told apart from the previous one at a glance.
-        buildConfigField("String", "BUILD_TIME", quoted(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(java.time.ZoneId.of("Asia/Seoul")).format(java.time.Instant.now())))
-        buildConfigField("String", "BUILD_COMMIT", quoted(
-            (System.getenv("GITHUB_SHA")?.take(7)
-                ?: runCatching { ProcessBuilder("git", "rev-parse", "--short", "HEAD").start().inputStream.bufferedReader().readText().trim() }.getOrNull())
-                ?.takeIf { it.isNotBlank() } ?: "local"))
+        buildConfigField("String", "BUILD_TIME", quoted(buildStampTime))
+        buildConfigField("String", "BUILD_COMMIT", quoted(buildStampCommit))
     }
     // Stable debug signature so one OAuth SHA-1 registration keeps working across CI and local builds.
     // drivemuse.keystore is a throwaway TEST key committed on purpose; never ship a release signed with it.
