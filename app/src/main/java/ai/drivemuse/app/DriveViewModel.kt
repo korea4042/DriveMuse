@@ -259,6 +259,18 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun handoff(track: Track?) {
         suspendAgent()
         if(track!=null && !Constraints(excludedGenres=profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다");return }
+        // §30 Spotify: a linked account can play the exact recording, so it is tried before the
+        // YouTube handoff. A failure falls back rather than leaving the user with nothing.
+        if (track != null && runtime.spotifyAuth.linked) {
+            viewModelScope.launch {
+                val result = runtime.spotifyPlayback.play(track)
+                if (result.ok) {
+                    message(result.message)
+                    if (!ui.value.demo) { repository.recordPlay(track.id); runCatching { runtime.spotifyPlayback.queue(ui.value.queue.filter { it.id != track.id }) } }
+                } else message(result.message + " · YouTube로 엽니다: " + playback.open(track))
+            }
+            return
+        }
         val result = playback.open(track)
         // Exposure only (§17 EXPOSED_ONLY): counted for fatigue and novelty, never as listening.
         if (track != null && !ui.value.demo) viewModelScope.launch { repository.recordPlay(track.id); db.catalog().ref("youtube",track.id)?.trackId?.let { db.catalog().recordExposure("default",it,System.currentTimeMillis(),runtime.historyCoverageSince()) } }

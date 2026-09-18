@@ -7,6 +7,7 @@ import ai.drivemuse.app.knowledge.*
 import ai.drivemuse.app.onboarding.SurveyStore
 import ai.drivemuse.app.spotify.SpotifyApi
 import ai.drivemuse.app.spotify.SpotifyAuth
+import ai.drivemuse.app.spotify.SpotifyPlayback
 import ai.drivemuse.domain.*
 import android.content.Context
 import kotlinx.coroutines.flow.first
@@ -50,6 +51,7 @@ class IntegrationRuntime private constructor(context: Context) {
         writeRefresh = { value -> runBlocking { integrations.putSecret(ProviderId.SPOTIFY, "refreshToken", value) } }
     )
     val spotify = SpotifyApi(spotifyAuth)
+    val spotifyPlayback = SpotifyPlayback(spotify)
     val coordinator = DiscoveryCoordinator(db, youtube, registry)
     val surveyStore = SurveyStore(db)
     val prefs = Preferences(context)
