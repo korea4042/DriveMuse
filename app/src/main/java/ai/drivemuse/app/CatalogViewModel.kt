@@ -70,7 +70,7 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
                     ProviderId.MUSICBRAINZ -> { _ -> ai.drivemuse.app.integration.ProbeResult(true) }
                     // §22: a Client ID proves nothing by itself; the consent round trip is the real check.
                     ProviderId.SPOTIFY -> { v -> if (v["clientId"].isNullOrBlank()) ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "Client ID가 필요합니다") else ai.drivemuse.app.integration.ProbeResult(true) }
-                    ProviderId.WEATHER -> { _ -> ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "날씨 제공자가 아직 확정되지 않았습니다") }
+                    ProviderId.WEATHER -> Probes.weather()
                 }
                 val result = runtime.integrations.applyDraft(p, values, probe)
                 messageMutable.value = when (result.status) {
@@ -101,6 +101,6 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
     }
     fun spotifySignOut() { runtime.spotifyAuth.signOut(); messageMutable.value = "Spotify 연결을 해제했습니다" }
 
-    fun label(p: ProviderId) = when (p) { ProviderId.YOUTUBE -> "YouTube 조회"; ProviderId.SPOTIFY -> "Spotify"; ProviderId.MUSICBRAINZ -> "MusicBrainz"; ProviderId.LASTFM -> "Last.fm"; ProviderId.LISTENBRAINZ -> "ListenBrainz"; ProviderId.FIREBASE_AI -> "AI 추천 (Firebase)"; ProviderId.GEMINI_DIRECT -> "개인 Gemini 키"; ProviderId.WEATHER -> "날씨 서비스" }
+    fun label(p: ProviderId) = when (p) { ProviderId.YOUTUBE -> "YouTube 조회"; ProviderId.SPOTIFY -> "Spotify"; ProviderId.MUSICBRAINZ -> "MusicBrainz"; ProviderId.LASTFM -> "Last.fm"; ProviderId.LISTENBRAINZ -> "ListenBrainz"; ProviderId.FIREBASE_AI -> "AI 추천 (Firebase)"; ProviderId.GEMINI_DIRECT -> "개인 Gemini 키"; ProviderId.WEATHER -> "날씨 (기상청)" }
     fun explain(e: IntegrationError) = when (e) { IntegrationError.FORMAT -> "입력 형식을 확인해 주세요"; IntegrationError.API_NOT_ENABLED -> "프로젝트에서 API 사용 설정이 필요합니다"; IntegrationError.KEY_RESTRICTED -> "키 제한(패키지·서명·API)이 이 앱과 맞지 않습니다"; IntegrationError.PERMISSION -> "권한 또는 계정 정보를 확인해 주세요"; IntegrationError.QUOTA -> "오늘 한도에 도달했습니다"; IntegrationError.NETWORK -> "네트워크를 확인하고 다시 시도해 주세요"; else -> "알 수 없는 오류" }
 }

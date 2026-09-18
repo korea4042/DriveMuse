@@ -159,10 +159,10 @@ class MainActivity: ComponentActivity() {
                         else runCatching { appContext.startActivity(intent) }.onFailure { vm.message("브라우저를 열 수 없습니다") }
                     })
                 }
-                "설정/재생" -> item { PlaybackDetail(diagnostic.state.toString(),diagnostic.hasMediaId,diagnostic.positionMs) { appContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } }
+                "설정/재생" -> item { PlaybackDetail(diagnostic.state.toString(),diagnostic.hasMediaId,diagnostic.positionMs,ai.drivemuse.app.playback.MediaObservationService.granted(appContext)) { appContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } }
                 "설정/AI" -> item { AiDetail(cvm,vm.aiConfigured,survey?.aiConsent==true,ui.driving,vm::surveyConsent) { vm.message("Firebase 콘솔 → 프로젝트 설정에서 프로젝트 ID·앱 ID·웹 API 키를 확인하고, 사용할 모델 ID를 함께 입력하세요") } }
-                "설정/위치" -> item { GlassSurface { SettingsTitle("위치와 날씨","대략 위치로 지역 날씨만 확인합니다"); Text(ui.weatherLabel,fontSize=16.sp,lineHeight=24.sp); Text(if(vm.weatherConfigured) "날씨 서비스 연결됨 · 기상청 격자 실황" else "날씨 서비스 설정 필요 · 위치 없이도 추천은 동작해요",fontSize=14.sp,lineHeight=20.sp,color=DriveColors.Muted); DriveButton("현재 위치로 날씨 갱신",!ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } } }
-                "설정/장소" -> item { PlacesDetail({deleteWhat="home"},{deleteWhat="work"},{deleteWhat="zones"},ui.driving) }
+                "설정/위치" -> item { WeatherDetail(vm,cvm,ui.weatherLabel,ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } }
+                "설정/장소" -> item { PlacesDetail(vm,{deleteWhat="home"},{deleteWhat="work"},{deleteWhat="zones"},ui.driving) }
                 "설정/수집" -> item { CollectionDetail(cvm,ui.driving) }
                 "설정/차량" -> {
                     item { SettingsTitle("차량 연결","연결되면 조용한 알림으로 시작합니다") }

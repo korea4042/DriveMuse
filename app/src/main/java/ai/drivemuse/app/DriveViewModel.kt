@@ -118,7 +118,30 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             mutable.update { it.copy(weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "기상청 · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"} · ${java.time.Instant.ofEpochMilli(fact.observedAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime()}${if(fact.stale(System.currentTimeMillis())) " · 오래된 관측" else ""}") }
         }
     }
-    fun registerZone(zone: Zone) { if(ui.value.driving) return;contextJob?.cancel();contextJob=viewModelScope.launch { message(if(location.register(zone)) "영역을 암호화하여 저장했습니다" else "위치 권한과 정확도를 확인해 주세요") } }
+    /** Registered zones, so the screen shows whether saving actually worked (§24). */
+    private val zonesMutable = MutableStateFlow(emptySet<Zone>())
+    val registeredZones = zonesMutable.asStateFlow()
+    /** Pool size and the last refresh failure, shown on the music service screen. */
+    private val poolMutable = MutableStateFlow("후보 확인 전")
+    val poolStatus = poolMutable.asStateFlow()
+    fun refreshPool() {
+        viewModelScope.launch {
+            val before = dao.candidateCount(0)
+            val outcome = runCatching { repository.refresh(settings.value) }
+            val after = dao.candidateCount(0)
+            poolMutable.value = outcome.fold(
+                onSuccess = { "후보 ${after}곡" + (if (after == before) " · 새로 추가된 곡 없음" else " · ${after - before}곡 추가") },
+                onFailure = { "후보 ${after}곡 · 불러오기 실패: " + (it.message ?: it::class.simpleName) }
+            )
+            message(poolMutable.value)
+        }
+    }
+    fun refreshZones() { zonesMutable.value = runCatching { location.registeredZones() }.getOrDefault(emptySet()) }
+    fun registerZone(zone: Zone) { if(ui.value.driving) return;contextJob?.cancel();contextJob=viewModelScope.launch {
+        val ok = location.register(zone)
+        refreshZones()
+        message(if(ok) "${if (zone == Zone.HOME) "집" else "회사"}을(를) 등록했습니다" else "위치 권한과 정확도를 확인해 주세요. 실외에서 다시 시도하면 잘 잡혀요")
+    } }
     fun deleteZones() { if(ui.value.driving) return;contextJob?.cancel();location.deleteZones();region=null;weatherFact=null;weather.clear();contextVersion++;cancelSelection();viewModelScope.launch { coordinator.invalidate() };message("등록 영역을 삭제했습니다") }
     fun rate(track: Track, positive: Boolean) {
         if(ui.value.driving || ui.value.demo) return

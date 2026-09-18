@@ -167,6 +167,11 @@ object Probes {
             }, e.message ?: "")
         } catch (e: Exception) { ProbeResult(false, IntegrationError.NETWORK, e.message ?: "") }
     }
+    fun weather(): suspend (Map<String, String>) -> ProbeResult = { v ->
+        val key = v["apiKey"]?.trim().orEmpty()
+        if (key.isBlank()) ProbeResult(false, IntegrationError.UNKNOWN, "서비스 키가 필요합니다")
+        else ai.drivemuse.app.context.WeatherRepository.probe(key)
+    }
     fun lastFm(http: ai.drivemuse.app.knowledge.ProviderHttp): suspend (Map<String, String>) -> ProbeResult = { v ->
         try {
             val j = http.getJson("https://ws.audioscrobbler.com/2.0/?method=track.getTopTags&api_key=${http.enc(v.getValue("apiKey"))}&artist=cher&track=believe&format=json")

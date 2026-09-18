@@ -41,7 +41,7 @@ import java.time.format.DateTimeFormatter
     val integrations by cvm.integrations.collectAsStateWithLifecycleCompat()
     val collection by cvm.collection.collectAsStateWithLifecycleCompat()
     val ai = integrations.getValue(ProviderId.FIREBASE_AI)
-    val aiReady = vm.aiConfigured || ai.ready
+    val aiReady = vm.aiConfigured || ai.ready || integrations.getValue(ProviderId.GEMINI_DIRECT).ready
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("나에게 맞게.", "상태를 보고, 필요한 것만 바꾸세요")
         GlassSurface {
@@ -75,6 +75,9 @@ import java.time.format.DateTimeFormatter
         GlassSurface {
             Text(if (cvm.spotifyLinked) "계정 연결됨" else "계정 미연결", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             Text("연결하면 저장한 곡과 자주 듣는 곡을 읽고, 재생을 제어할 수 있어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            val pool by vm.poolStatus.collectAsStateWithLifecycle()
+            Text(pool, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            if (cvm.spotifyLinked) DriveButton("후보 다시 불러오기", !driving) { vm.refreshPool() }
             if (cvm.spotifyLinked) OutlinedButton(onClick = { cvm.spotifySignOut() }, enabled = !driving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Spotify 연결 해제") }
             else DriveButton("Spotify 계정 연결", !driving && integrations.getValue(ProviderId.SPOTIFY).ready) { onSpotifyConnect() }
         }
@@ -113,7 +116,7 @@ import java.time.format.DateTimeFormatter
 }
 
 /** Detail: playback & listening (§24 wording; L0/L1/L2 only in the diagnostics expander). */
-@Composable fun PlaybackDetail(diagnosticState: String, hasMediaId: Boolean, positionMs: Long?, onOpenNotificationSettings: () -> Unit) {
+@Composable fun PlaybackDetail(diagnosticState: String, hasMediaId: Boolean, positionMs: Long?, accessGranted: Boolean, onOpenNotificationSettings: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("재생과 청취 학습", "음악 앱에서 재생하고, 확인된 것만 배웁니다")
         GlassSurface {
@@ -130,8 +133,9 @@ import java.time.format.DateTimeFormatter
 }
 
 /** Detail: AI (§24). Toggle is only shown enabled once config is READY; effectiveEnabled drives the label. */
-@Composable fun AiDetail(cvm: CatalogViewModel, configReady: Boolean, requested: Boolean, driving: Boolean, onRequested: (Boolean) -> Unit, onSetupHelp: () -> Unit) {
+@Composable fun AiDetail(cvm: CatalogViewModel, gatewayReady: Boolean, requested: Boolean, driving: Boolean, onRequested: (Boolean) -> Unit, onSetupHelp: () -> Unit) {
     val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
+    val configReady = gatewayReady || integrations.getValue(ProviderId.GEMINI_DIRECT).ready || integrations.getValue(ProviderId.FIREBASE_AI).ready
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("AI 추천", "설정이 끝난 뒤에만 사용할 수 있어요")
         IntegrationCard(cvm, ProviderId.GEMINI_DIRECT, integrations.getValue(ProviderId.GEMINI_DIRECT), busy == ProviderId.GEMINI_DIRECT, driving,
@@ -176,10 +180,29 @@ import java.time.format.DateTimeFormatter
     }
 }
 
-@Composable fun PlacesDetail(onRegisterHome: () -> Unit, onRegisterWork: () -> Unit, onDelete: () -> Unit, driving: Boolean) {
+/** Detail: location and weather (§24). The key has a field now, and the state says what is stored. */
+@Composable fun WeatherDetail(vm: DriveViewModel, cvm: CatalogViewModel, weatherLabel: String, driving: Boolean, onRefresh: () -> Unit) {
+    val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        SettingsTitle("위치와 날씨", "대략 위치로 지역 날씨만 확인합니다")
+        GlassSurface {
+            Text(weatherLabel, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text("위치 권한을 허용하면 현재 지역의 실황을 가져옵니다. 권한이 없어도 추천은 동작해요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            DriveButton("현재 위치로 날씨 갱신", !driving, onClick = onRefresh)
+        }
+        IntegrationCard(cvm, ProviderId.WEATHER, integrations.getValue(ProviderId.WEATHER), busy == ProviderId.WEATHER, driving,
+            "공공데이터포털에서 기상청 단기예보 API를 신청하고 받은 일반 인증키(디코딩)를 넣으세요. 저장하면 실제 조회로 확인합니다.")
+    }
+}
+
+@Composable fun PlacesDetail(vm: DriveViewModel, onRegisterHome: () -> Unit, onRegisterWork: () -> Unit, onDelete: () -> Unit, driving: Boolean) {
+    val zones by vm.registeredZones.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { vm.refreshZones() }
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("집과 회사", "현재 위치를 중심점으로 등록합니다")
         GlassSurface {
+            Text("집 " + (if (Zone.HOME in zones) "등록됨" else "미등록") + " · 회사 " + (if (Zone.WORK in zones) "등록됨" else "미등록"),
+                fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             Text("등록한 중심점과 반경만 기기에 암호화 저장합니다. 이동 경로는 저장하지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             DriveButton("현재 위치를 집으로 등록", !driving, onRegisterHome); DriveButton("현재 위치를 회사로 등록", !driving, onRegisterWork)
             if (!driving) TextButton(onClick = onDelete, modifier = Modifier.heightIn(min = 48.dp)) { Text("등록 장소 삭제") }

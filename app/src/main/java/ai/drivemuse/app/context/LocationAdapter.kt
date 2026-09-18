@@ -49,6 +49,7 @@ class LocationAdapter(private val context: Context) {
         val pair=KmaGrid.from(location.latitude,location.longitude)?:return null
         return Region(pair.first,pair.second,regions.classify(location),location.time).also { cached=it }
     }
+    fun registeredZones(): Set<Zone> = regions.registered()
     suspend fun register(zone: Zone): Boolean {
         require(zone in setOf(Zone.HOME,Zone.WORK))
         val location=current()?:return false
@@ -91,4 +92,6 @@ private class RegisteredZones(context: Context) {
         return if(matches.size==1) Zone.valueOf(matches.single().getString("zone")) else Zone.UNKNOWN
     }
     fun clear() { file.delete();KeyStore.getInstance("AndroidKeyStore").apply { load(null);deleteEntry(alias) } }
+    /** Which zones are registered, so the screen can say whether saving worked (§24). */
+    fun registered(): Set<Zone> = load().let { rows -> (0 until rows.length()).mapNotNull { runCatching { Zone.valueOf(rows.getJSONObject(it).getString("zone")) }.getOrNull() }.toSet() }
 }

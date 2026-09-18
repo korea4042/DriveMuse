@@ -25,12 +25,12 @@ object ProviderRequirements {
         ProviderId.LISTENBRAINZ -> listOf(CredentialField("userName", "ListenBrainz 사용자명 (선택)", false, false), CredentialField("token", "ListenBrainz 토큰 (개인 기능에만)", true, false))
         ProviderId.FIREBASE_AI -> listOf(CredentialField("projectId", "Firebase projectId", false, true), CredentialField("applicationId", "Firebase applicationId", false, true), CredentialField("apiKey", "Firebase API key", true, true), CredentialField("modelId", "모델 ID", false, true))
         ProviderId.GEMINI_DIRECT -> listOf(CredentialField("apiKey", "개인 Gemini API 키", true, true), CredentialField("modelId", "모델 ID", false, true))
-        ProviderId.WEATHER -> emptyList()   // provider not selected yet (§22/§28)
+        ProviderId.WEATHER -> listOf(CredentialField("apiKey", "기상청 서비스 키 (디코딩된 값)", true, true))
     }
     fun authMode(p: ProviderId) = when (p) {
         ProviderId.YOUTUBE -> AuthMode.API_KEY; ProviderId.SPOTIFY -> AuthMode.OAUTH_PKCE; ProviderId.MUSICBRAINZ -> AuthMode.NONE; ProviderId.LASTFM -> AuthMode.API_KEY
         ProviderId.LISTENBRAINZ -> AuthMode.USERNAME_OPTIONAL_TOKEN; ProviderId.FIREBASE_AI -> AuthMode.FIREBASE_CONFIG
-        ProviderId.GEMINI_DIRECT -> AuthMode.API_KEY; ProviderId.WEATHER -> AuthMode.PENDING_PROVIDER_SELECTION
+        ProviderId.GEMINI_DIRECT -> AuthMode.API_KEY; ProviderId.WEATHER -> AuthMode.API_KEY
     }
     /** Which capabilities remain when the given credential keys are present. */
     fun capabilities(p: ProviderId, present: Set<String>): Set<Capability> {

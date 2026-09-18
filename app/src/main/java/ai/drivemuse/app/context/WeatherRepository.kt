@@ -37,4 +37,30 @@ class WeatherRepository(private val keyProvider: () -> String = { BuildConfig.WE
             WeatherFact(region.id,temp,rain,observed).takeIf { it.usable(region.id,now) }?.also { cached=it }?:valid
         } catch(_: Exception) { valid } finally { connection.disconnect() }
     }
+
+    companion object {
+        /** One cheap live call so "연결됨" means the key really answered (§22). Seoul grid 60,127. */
+        suspend fun probe(key: String): ai.drivemuse.app.integration.ProbeResult = withContext(Dispatchers.IO) {
+            val base = ZonedDateTime.now(ZoneId.of("Asia/Seoul")).minusMinutes(40).withMinute(0).withSecond(0).withNano(0)
+            val query = "serviceKey=" + URLEncoder.encode(key, "UTF-8") +
+                "&pageNo=1&numOfRows=10&dataType=JSON&base_date=" + base.format(DateTimeFormatter.ofPattern("yyyyMMdd")) +
+                "&base_time=" + base.format(DateTimeFormatter.ofPattern("HHmm")) + "&nx=60&ny=127"
+            val c = try {
+                (URL("https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getUltraSrtNcst?$query").openConnection() as HttpURLConnection)
+                    .apply { connectTimeout = 6000; readTimeout = 10000 }
+            } catch (e: Exception) { return@withContext ai.drivemuse.app.integration.ProbeResult(false, ai.drivemuse.domain.IntegrationError.NETWORK, e.message ?: "") }
+            try {
+                if (c.responseCode != 200) return@withContext ai.drivemuse.app.integration.ProbeResult(false, ai.drivemuse.domain.IntegrationError.NETWORK, "응답 ${c.responseCode}")
+                val body = c.inputStream.use { String(it.readNBytes(200_000), Charsets.UTF_8) }
+                val code = runCatching { JSONObject(body).getJSONObject("response").getJSONObject("header").getString("resultCode") }.getOrNull()
+                when (code) {
+                    "00" -> ai.drivemuse.app.integration.ProbeResult(true)
+                    // 30 is an unregistered key, 31 expired, 22 over the daily limit.
+                    "30", "31" -> ai.drivemuse.app.integration.ProbeResult(false, ai.drivemuse.domain.IntegrationError.PERMISSION, "서비스 키를 확인해 주세요")
+                    "22" -> ai.drivemuse.app.integration.ProbeResult(false, ai.drivemuse.domain.IntegrationError.QUOTA, "오늘 한도 초과")
+                    else -> ai.drivemuse.app.integration.ProbeResult(false, ai.drivemuse.domain.IntegrationError.UNKNOWN, body.take(120))
+                }
+            } catch (e: Exception) { ai.drivemuse.app.integration.ProbeResult(false, ai.drivemuse.domain.IntegrationError.NETWORK, e.message ?: "") } finally { c.disconnect() }
+        }
+    }
 }

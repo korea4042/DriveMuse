@@ -12,7 +12,14 @@ import kotlinx.coroutines.flow.asStateFlow
 data class MediaDiagnostic(val connected: Boolean=false,val state: String="관측 권한 없음",val hasMediaId: Boolean=false,val positionMs: Long?=null)
 /** Diagnostic only. No notification bodies, playback events, or preference updates are stored. */
 class MediaObservationService: NotificationListenerService() {
-    companion object { private val mutable=MutableStateFlow(MediaDiagnostic());val diagnostic=mutable.asStateFlow() }
+    companion object {
+        private val mutable=MutableStateFlow(MediaDiagnostic());val diagnostic=mutable.asStateFlow()
+        /** Whether the user actually granted notification access, so the screen can say so. */
+        fun granted(context: android.content.Context): Boolean = runCatching {
+            android.provider.Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+                ?.contains(context.packageName) == true
+        }.getOrDefault(false)
+    }
     private var controller: MediaController?=null
     private val callback=object: MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) { publish() }
