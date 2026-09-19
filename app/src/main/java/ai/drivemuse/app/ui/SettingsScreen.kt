@@ -81,6 +81,18 @@ import java.time.format.DateTimeFormatter
             if (cvm.spotifyLinked) OutlinedButton(onClick = { cvm.spotifySignOut() }, enabled = !driving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Spotify 연결 해제") }
             else DriveButton("Spotify 계정 연결", !driving && integrations.getValue(ProviderId.SPOTIFY).ready) { onSpotifyConnect() }
         }
+        // Sign-in fails in the browser, not in the app, when these three do not match the
+        // dashboard exactly — so the app has to show what it is actually sending.
+        var showRegistration by rememberSaveable { mutableStateOf(false) }
+        TextButton(onClick = { showRegistration = !showRegistration }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (showRegistration) "등록 정보 숨기기" else "연결이 안 되나요? 등록 정보 보기") }
+        if (showRegistration) GlassSurface {
+            val identity = remember { ai.drivemuse.app.AndroidClientIdentity.of(LocalContext.current) }
+            Text("Spotify 대시보드에 아래 값이 그대로 있어야 합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            Metric("Redirect URI", ai.drivemuse.app.spotify.SpotifyAuth.REDIRECT)
+            Metric("패키지명", identity?.packageName ?: "확인 불가")
+            Metric("SHA-1", identity?.sha1?.chunked(2)?.joinToString(":") ?: "확인 불가")
+            Text("셋 다 맞는데도 실패하면, 대시보드 User Management에 로그인하려는 계정의 이메일이 등록돼 있는지 확인해 주세요. 개발 모드 앱은 등록된 계정만 로그인할 수 있어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        }
         SectionTitle("음악 지식 (선택)")
         IntegrationCard(cvm, ProviderId.MUSICBRAINZ, integrations.getValue(ProviderId.MUSICBRAINZ), false, driving, "곡 식별에 사용합니다. 별도 키 없이 사용하며, 앱이 요청 속도를 관리합니다.")
         IntegrationCard(cvm, ProviderId.LASTFM, integrations.getValue(ProviderId.LASTFM), busy == ProviderId.LASTFM, driving, "장르 태그에 사용합니다. API 키만 필요하고 Last.fm 로그인이나 Shared Secret은 필요하지 않아요.")

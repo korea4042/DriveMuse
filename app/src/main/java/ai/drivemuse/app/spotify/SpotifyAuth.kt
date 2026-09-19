@@ -39,17 +39,20 @@ class SpotifyAuth(
          *
          * app-remote-control is what the Android App Remote SDK connects with. Without it the SDK
          * fails at connect even though every Web API call still works, which is exactly the shape
-         * of "the API is fine but playback never starts". streaming is requested alongside it
-         * because Spotify treats the pair as the playback grant.
+         * of "the API is fine but playback never starts".
+         *
+         * `streaming` is deliberately not requested: it belongs to the Web Playback SDK in a
+         * browser, does nothing for App Remote, and asking for it can make authorization itself
+         * fail on a free account — a scope that buys nothing must not be able to break sign-in.
          */
         val SCOPES = listOf(
             "user-read-email", "user-read-private",
             "user-library-read", "user-top-read", "user-follow-read", "user-read-recently-played",
             "user-read-playback-state", "user-modify-playback-state",
-            "app-remote-control", "streaming"
+            "app-remote-control"
         )
         /** Granted scopes are per authorization: an existing link does not gain a new scope. */
-        val PLAYBACK_SCOPES = setOf("app-remote-control", "streaming")
+        val PLAYBACK_SCOPES = setOf("app-remote-control")
     }
 
     private val mutex = Mutex()
