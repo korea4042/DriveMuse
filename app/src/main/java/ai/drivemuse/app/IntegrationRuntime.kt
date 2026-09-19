@@ -21,7 +21,9 @@ import kotlinx.coroutines.runBlocking
 class IntegrationRuntime private constructor(context: Context) {
     val db = DriveDatabase.get(context)
     val credentials = CredentialStore(context)
-    val integrations = IntegrationConfigRepository(db, credentials, legacyDefaults = mapOf(ProviderId.YOUTUBE to mapOf("apiKey" to BuildConfig.YT_API_KEY), ProviderId.FIREBASE_AI to mapOf("modelId" to BuildConfig.GEMINI_MODEL), ProviderId.WEATHER to mapOf("apiKey" to BuildConfig.WEATHER_API_KEY)))
+    val integrations = IntegrationConfigRepository(db, credentials, // §8: no YouTube default. A build-time key must not be able to revive a provider the
+        // product no longer uses and the settings screen no longer shows.
+        legacyDefaults = mapOf(ProviderId.FIREBASE_AI to mapOf("modelId" to BuildConfig.GEMINI_MODEL), ProviderId.WEATHER to mapOf("apiKey" to BuildConfig.WEATHER_API_KEY)))
     val tokens = TokenStore()
     private val ua = "DriveMuse/${BuildConfig.VERSION_NAME} (Android; contact: drivemuse-app@example.invalid)"
     val musicBrainzHttp = ProviderHttp(ProviderId.MUSICBRAINZ, ua)
@@ -32,6 +34,9 @@ class IntegrationRuntime private constructor(context: Context) {
     fun secret(p: ProviderId, key: String): String? = runBlocking { integrations.secrets(p)[key] }
     fun secrets(p: ProviderId): Map<String, String> = runBlocking { integrations.secrets(p) }
     private val androidIdentity = AndroidClientIdentity.of(context)
+    // Retired (§8): constructed only so the v2 candidate migration path keeps compiling. With no
+    // stored key every call fails fast, and DiscoveryCoordinator reports YOUTUBE_UNCONFIGURED.
+    @Suppress("DEPRECATION")
     val youtube = YouTubeApi({ secret(ProviderId.YOUTUBE, "apiKey") ?: "" }, tokens, { androidIdentity })
     val registry = ProviderRegistry(listOf(
         MusicBrainzAdapter(musicBrainzHttp),
@@ -69,8 +74,8 @@ class IntegrationRuntime private constructor(context: Context) {
         val control = db.catalog().control("default")
         if (control?.autoEnabled == false) return null
         val profile = Survey.map(draft.answers)
-        val settings = prefs.flow.first()
-        val liked = if (settings.accountLinked && tokens.current() != null) runCatching { youtube.subscribedChannels().map { it.removeSuffix(" - Topic") }.toSet() }.getOrDefault(emptySet()) else emptySet()
+        // §8: subscriptions came from the retired YouTube account link and are no longer read.
+        val liked = emptySet<String>()
         val yt = integrations.active(ProviderId.YOUTUBE)
         return RunSnapshot("default", control?.generation ?: 1, draft.revision, yt.configVersion, profile, liked, Constraints(excludedGenres = profile.exclusions))
     }

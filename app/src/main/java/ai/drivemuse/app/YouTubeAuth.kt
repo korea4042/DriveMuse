@@ -30,6 +30,7 @@ sealed interface AuthState {
  * them buys nothing because Play Services re-issues silently, and it would create a secret
  * on disk that connection teardown has to chase.
  */
+@Deprecated("YouTube is no longer a music source (§8). Kept for the v2 candidate migration path only.")
 class YouTubeAuth(private val context: Context) {
 
     private val scope = Scope(Policy.SCOPE_READONLY)

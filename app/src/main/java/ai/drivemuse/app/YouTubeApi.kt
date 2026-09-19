@@ -45,6 +45,7 @@ data class AndroidClientIdentity(val packageName: String, val sha1: String) {
  * token, everything else with the API key. The two are mutually exclusive — sending both on
  * one request makes the API ambiguous about which principal it is serving.
  */
+@Deprecated("YouTube is no longer a music source (§8). Kept for the v2 candidate migration path only.")
 class YouTubeApi(private val apiKeyProvider: () -> String, private val tokens: TokenStore, private val androidIdentity: () -> AndroidClientIdentity? = { null }) {
     /** Legacy build-constant constructor; the runtime config path (v2.3 §22) passes a provider instead. */
     constructor(apiKey: String, tokens: TokenStore) : this({ apiKey }, tokens)

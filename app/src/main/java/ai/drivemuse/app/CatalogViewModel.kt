@@ -62,7 +62,8 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val probe: suspend (Map<String, String>) -> ai.drivemuse.app.integration.ProbeResult = when (p) {
-                    ProviderId.YOUTUBE -> Probes.youtube { key -> YouTubeApi(key, runtime.tokens) }
+                    // §8: retired as a music source. The code stays for the migration path only.
+                    ProviderId.YOUTUBE -> { _ -> ai.drivemuse.app.integration.ProbeResult(false, IntegrationError.UNKNOWN, "YouTube 연동은 더 이상 사용하지 않습니다") }
                     ProviderId.LASTFM -> Probes.lastFm(runtime.lastFmHttp)
                     ProviderId.LISTENBRAINZ -> Probes.listenBrainz(runtime.listenBrainzHttp)
                     ProviderId.FIREBASE_AI -> Probes.firebaseAi(getApplication<Application>())
@@ -78,7 +79,6 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
                     IntegrationStatus.ERROR -> "${label(p)} 연결 실패 · ${explain(result.error)}"
                     else -> "${label(p)} 설정을 저장했습니다"
                 }
-                if (result.ready && p == ProviderId.YOUTUBE) MetadataSyncWorker.topUp(getApplication(), "INTEGRATION_CHANGED")
             } catch (e: CancellationException) { throw e } catch (e: Exception) { messageMutable.value = "설정을 적용하지 못했습니다. 기존 연결은 유지됩니다" }
             finally { busyMutable.value = null }
         }
@@ -117,6 +117,6 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
     }
     fun spotifySignOut() { runtime.spotifyAuth.signOut(); refreshLinked(); messageMutable.value = "Spotify 연결을 해제했습니다" }
 
-    fun label(p: ProviderId) = when (p) { ProviderId.YOUTUBE -> "YouTube 조회"; ProviderId.SPOTIFY -> "Spotify"; ProviderId.MUSICBRAINZ -> "MusicBrainz"; ProviderId.LASTFM -> "Last.fm"; ProviderId.LISTENBRAINZ -> "ListenBrainz"; ProviderId.FIREBASE_AI -> "AI 추천 (Firebase)"; ProviderId.GEMINI_DIRECT -> "개인 Gemini 키"; ProviderId.WEATHER -> "날씨 (Open-Meteo)" }
+    fun label(p: ProviderId) = when (p) { ProviderId.YOUTUBE -> "YouTube 조회 (사용 안 함)"; ProviderId.SPOTIFY -> "Spotify"; ProviderId.MUSICBRAINZ -> "MusicBrainz"; ProviderId.LASTFM -> "Last.fm"; ProviderId.LISTENBRAINZ -> "ListenBrainz"; ProviderId.FIREBASE_AI -> "AI 추천 (Firebase)"; ProviderId.GEMINI_DIRECT -> "개인 Gemini 키"; ProviderId.WEATHER -> "날씨 (Open-Meteo)" }
     fun explain(e: IntegrationError) = when (e) { IntegrationError.FORMAT -> "입력 형식을 확인해 주세요"; IntegrationError.API_NOT_ENABLED -> "프로젝트에서 API 사용 설정이 필요합니다"; IntegrationError.KEY_RESTRICTED -> "키 제한(패키지·서명·API)이 이 앱과 맞지 않습니다"; IntegrationError.PERMISSION -> "권한 또는 계정 정보를 확인해 주세요"; IntegrationError.QUOTA -> "오늘 한도에 도달했습니다"; IntegrationError.NETWORK -> "네트워크를 확인하고 다시 시도해 주세요"; else -> "알 수 없는 오류" }
 }

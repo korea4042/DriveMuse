@@ -138,10 +138,15 @@ import java.time.format.DateTimeFormatter
             Text("추천한 곡은 Spotify에서 재생됩니다. 첫 곡을 누르면 나머지 추천도 큐에 들어갑니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
         }
         GlassSurface {
-            Text(if (hasMediaId) "청취 상태를 확인하고 있어요" else "Spotify 재생 상태를 직접 받습니다", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
-            Text("Spotify는 App Remote가 재생 상태를 직접 알려주므로 알림 접근 권한이 필요 없습니다. 예전 YouTube 연동용 기능이라 허용해도 달라지는 것이 없어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
-            DriveButton("청취 상태 접근 허용") { onOpenNotificationSettings() }
-            Expander("개발 진단") { Text("재생 연동 Spotify App Remote / 알림 접근 " + (if (accessGranted) "허용" else "꺼짐") + " (Spotify에는 사용하지 않음) / 관측 상태 $diagnosticState / 재생 위치 ${positionMs?.let { "${it}ms" } ?: "미상"}", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+            Text("재생 상태를 직접 받고 있어요", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text("끝까지 들은 곡과 건너뛴 곡을 Spotify가 알려주고, 그것만 취향 학습에 씁니다. 원인을 확인할 수 없는 중단은 기록만 하고 배우지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            // §24: a primary action that changes nothing is worse than no action. Notification
+            // access did the observing for YouTube; Spotify reports its own state, so it moves
+            // into diagnostics instead of sitting on the screen as a thing to fix.
+            Expander("개발 진단") {
+                Text("재생 연동 Spotify App Remote / 관측 상태 $diagnosticState / 재생 위치 ${positionMs?.let { "${it}ms" } ?: "미상"} / 알림 접근 " + (if (accessGranted) "허용" else "꺼짐") + " · Spotify에는 사용하지 않음", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+                TextButton(onClick = onOpenNotificationSettings, modifier = Modifier.heightIn(min = 48.dp)) { Text("알림 접근 설정 열기") }
+            }
         }
     }
 }
