@@ -40,6 +40,8 @@ import ai.drivemuse.domain.*
 import android.content.Intent
 import ai.drivemuse.designsystem.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -52,7 +54,7 @@ class MainActivity: ComponentActivity() {
         redirect.value = intent?.data
         setContent { DriveMuseTheme { DriveApp(redirect = redirect) } }
     }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); redirect.value = intent.data }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); redirect.value = intent.data }
 }
 @Composable fun DriveApp(vm: DriveViewModel = viewModel(), cvm: CatalogViewModel = viewModel(), redirect: MutableStateFlow<android.net.Uri?>? = null) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -66,8 +68,15 @@ class MainActivity: ComponentActivity() {
     val locationPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed -> if(allowed) vm.refreshWeather() else vm.message("위치 없이 기본 상황으로 추천합니다") }
     val redirectFlow = remember(redirect) { redirect ?: MutableStateFlow<android.net.Uri?>(null) }
     val pendingRedirect by redirectFlow.collectAsStateWithLifecycle()
-    LaunchedEffect(pendingRedirect) {
-        pendingRedirect?.takeIf { it.scheme == "drivemuse" }?.let { uri -> redirectFlow.value = null; if (cvm.onSpotifyRedirect(uri)) vm.onSpotifyLinked() }
+    // The key must not depend on the value being consumed: clearing the flow to mark the redirect
+    // as used would change the key and cancel the token exchange that is still in flight, which
+    // left sign-in silently dead. Collect from a keyless effect and clear only once it is done.
+    LaunchedEffect(Unit) {
+        redirectFlow.filterNotNull().filter { it.scheme == "drivemuse" }.collect { uri ->
+            val linked = cvm.onSpotifyRedirect(uri)
+            redirectFlow.value = null
+            if (linked) vm.onSpotifyLinked()
+        }
     }
     // Sideloaded builds have no store behind them: check and fetch on launch, prompt when parked.
     val updateState by UpdateManager.state.collectAsStateWithLifecycle()

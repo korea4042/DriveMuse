@@ -67,18 +67,19 @@ import java.time.format.DateTimeFormatter
 /** Detail: music service integration (§22). Spotify only: a Client ID plus PKCE sign-in, no secret. */
 @Composable fun MusicServiceDetail(vm: DriveViewModel, cvm: CatalogViewModel, settings: Settings, driving: Boolean, onSpotifyConnect: () -> Unit) {
     val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
+    val linked by cvm.spotifyLinkedFlow.collectAsStateWithLifecycleCompat()
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("음악 서비스", "곡 정보를 어디서 가져올지 정합니다")
         SectionTitle("Spotify")
         IntegrationCard(cvm, ProviderId.SPOTIFY, integrations.getValue(ProviderId.SPOTIFY), busy == ProviderId.SPOTIFY, driving,
             "Spotify 개발자 대시보드에서 만든 앱의 Client ID를 넣으세요. Client Secret은 쓰지 않습니다. 곡을 지정해 재생하려면 Premium 계정이 필요해요.")
         GlassSurface {
-            Text(if (cvm.spotifyLinked) "계정 연결됨" else "계정 미연결", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text(if (linked) "계정 연결됨" else "계정 미연결", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             Text("연결하면 저장한 곡과 자주 듣는 곡을 읽고, 재생을 제어할 수 있어요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             val pool by vm.poolStatus.collectAsStateWithLifecycle()
             Text(pool, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
-            if (cvm.spotifyLinked) DriveButton("후보 다시 불러오기", !driving) { vm.refreshPool() }
-            if (cvm.spotifyLinked) OutlinedButton(onClick = { cvm.spotifySignOut() }, enabled = !driving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Spotify 연결 해제") }
+            if (linked) DriveButton("후보 다시 불러오기", !driving) { vm.refreshPool() }
+            if (linked) OutlinedButton(onClick = { cvm.spotifySignOut() }, enabled = !driving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Spotify 연결 해제") }
             else DriveButton("Spotify 계정 연결", !driving && integrations.getValue(ProviderId.SPOTIFY).ready) { onSpotifyConnect() }
         }
         // Sign-in fails in the browser, not in the app, when these three do not match the

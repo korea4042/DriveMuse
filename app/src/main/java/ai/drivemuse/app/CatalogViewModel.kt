@@ -92,7 +92,14 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
 
     /** Spotify sign-in and sign-out; the redirect comes back through MainActivity. */
     fun spotifyAuthorizeIntent() = runtime.spotifyAuth.authorizeIntent()
+    /**
+     * Observable, because a plain getter never recomposes: the account could link successfully and
+     * the screen would still read "계정 미연결" until something unrelated redrew it.
+     */
+    private val spotifyLinkedMutable = MutableStateFlow(runtime.spotifyAuth.linked)
+    val spotifyLinkedFlow = spotifyLinkedMutable.asStateFlow()
     val spotifyLinked get() = runtime.spotifyAuth.linked
+    private fun refreshLinked() { spotifyLinkedMutable.value = runtime.spotifyAuth.linked }
     /** Resolves to true only when the token exchange succeeded (AUTH01). */
     suspend fun onSpotifyRedirect(uri: android.net.Uri): Boolean {
         val error = runtime.spotifyAuth.onRedirect(uri)
@@ -100,12 +107,15 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
             null -> "Spotify 계정을 연결했습니다"
             "cancelled" -> "Spotify 연결을 취소했습니다"
             "no_pending_attempt" -> null   // duplicate delivery of an already-consumed redirect
+            "attempt_lost" -> "연결 요청 기록을 찾지 못했어요. ‘Spotify 계정 연결’을 다시 눌러 주세요"
+            "verifier_expired" -> "연결 요청이 만료됐어요(10분). 다시 눌러 주세요"
             "state_mismatch" -> "Spotify 연결 요청이 일치하지 않아요. 다시 시도해 주세요"
             else -> "Spotify 연결 실패 · $error"
         }
+        refreshLinked()
         return error == null
     }
-    fun spotifySignOut() { runtime.spotifyAuth.signOut(); messageMutable.value = "Spotify 연결을 해제했습니다" }
+    fun spotifySignOut() { runtime.spotifyAuth.signOut(); refreshLinked(); messageMutable.value = "Spotify 연결을 해제했습니다" }
 
     fun label(p: ProviderId) = when (p) { ProviderId.YOUTUBE -> "YouTube 조회"; ProviderId.SPOTIFY -> "Spotify"; ProviderId.MUSICBRAINZ -> "MusicBrainz"; ProviderId.LASTFM -> "Last.fm"; ProviderId.LISTENBRAINZ -> "ListenBrainz"; ProviderId.FIREBASE_AI -> "AI 추천 (Firebase)"; ProviderId.GEMINI_DIRECT -> "개인 Gemini 키"; ProviderId.WEATHER -> "날씨 (Open-Meteo)" }
     fun explain(e: IntegrationError) = when (e) { IntegrationError.FORMAT -> "입력 형식을 확인해 주세요"; IntegrationError.API_NOT_ENABLED -> "프로젝트에서 API 사용 설정이 필요합니다"; IntegrationError.KEY_RESTRICTED -> "키 제한(패키지·서명·API)이 이 앱과 맞지 않습니다"; IntegrationError.PERMISSION -> "권한 또는 계정 정보를 확인해 주세요"; IntegrationError.QUOTA -> "오늘 한도에 도달했습니다"; IntegrationError.NETWORK -> "네트워크를 확인하고 다시 시도해 주세요"; else -> "알 수 없는 오류" }

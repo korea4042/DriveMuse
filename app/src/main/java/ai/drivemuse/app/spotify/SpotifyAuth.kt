@@ -104,7 +104,9 @@ class SpotifyAuth(
         if (uri.scheme != "drivemuse" || uri.host != "spotify-callback") return "unexpected_redirect"
         val state = uri.getQueryParameter("state")
         val expected = expectedState
-        if (expected == null) return "no_pending_attempt"           // duplicate or stale callback
+        // Silent only for a true duplicate of a redirect already consumed. Anything else must say
+        // something: a silent failure here is indistinguishable from the app being broken.
+        if (expected == null) return if (uri.getQueryParameter("code") != null) "attempt_lost" else "no_pending_attempt"
         if (state != expected) return "state_mismatch"
         uri.getQueryParameter("error")?.let { verifier = null; return if (it == "access_denied") "cancelled" else it }
         val code = uri.getQueryParameter("code") ?: return "code_missing"
