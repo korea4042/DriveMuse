@@ -48,7 +48,9 @@ object RuleEngine {
         return MusicRule(id, scope, text, ratio, if (quiet) .55 else null, createdAt = now)
     }
 }
-data class Track(val id: String, val title: String, val artist: String, val familiar: Boolean = false, val energy: Double? = null, val affinity: Double = .5, val contextFit: Double = .5, val freshness: Double = .5, val fatigue: Double = 0.0, val skipped: Boolean = false, val durationMs: Long? = null, val features: List<VerifiedFeature> = emptyList())
+data class Track(val id: String, val title: String, val artist: String, val familiar: Boolean = false, val energy: Double? = null, val affinity: Double = .5, val contextFit: Double = .5, val freshness: Double = .5, val fatigue: Double = 0.0, val skipped: Boolean = false, val durationMs: Long? = null, val features: List<VerifiedFeature> = emptyList(),
+    // §5/§31: where `energy` came from. GENRE_APPROX is a guess from artist genres, not a measurement.
+    val energyBasis: String? = null)
 object Ranker {
     /**
      * Technical design v1.2 §6.9. The provider_relevance term is gone: the YouTube Data API

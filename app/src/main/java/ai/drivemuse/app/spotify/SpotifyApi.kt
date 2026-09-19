@@ -127,6 +127,22 @@ class SpotifyApi(private val auth: SpotifyAuth) {
             ?.optJSONArray("items")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("id")?.takeIf { id -> id.isNotBlank() } } }
             .orEmpty()
 
+    /**
+     * §5: genres are published per artist, never per track, so this is the only genre source the
+     * account API offers. Up to 50 ids per call; the caller batches and caches.
+     */
+    suspend fun artistGenres(ids: List<String>): Map<String, List<String>> {
+        val clean = ids.filter { it.isNotBlank() }.distinct().take(50)
+        if (clean.isEmpty()) return emptyMap()
+        val items = request("GET", "artists", mapOf("ids" to clean.joinToString(",")))?.optJSONArray("artists") ?: return emptyMap()
+        return (0 until items.length()).mapNotNull { index ->
+            val artist = items.optJSONObject(index) ?: return@mapNotNull null
+            val id = artist.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val genres = artist.optJSONArray("genres")?.let { g -> (0 until g.length()).mapNotNull { g.optString(it).takeIf(String::isNotBlank) } }.orEmpty()
+            id to genres
+        }.toMap()
+    }
+
     suspend fun artistTopTracks(artistId: String, market: String = "KR"): List<SpotifyTrack> =
         request("GET", "artists/$artistId/top-tracks", mapOf("market" to market))?.optJSONArray("tracks").toTracks()
 

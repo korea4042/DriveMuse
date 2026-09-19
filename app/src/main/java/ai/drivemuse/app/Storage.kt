@@ -82,8 +82,17 @@ class Preferences(private val context: Context) {
     @PrimaryKey val videoId: String, val title: String, val artist: String,
     val durationSec: Int, val topics: String, val familiar: Boolean,
     val affinity: Double, val freshness: Double, val energy: Double?,
-    val source: String, val fetchedAt: Long, val audioLanguage: String? = null
+    val source: String, val fetchedAt: Long, val audioLanguage: String? = null,
+    // §5: an approximation derived from artist genres, kept apart from the measured `energy`
+    // column so nothing downstream can mistake it for one.
+    val energyHint: Double? = null, val energyBasis: String? = null, val artistIds: String? = null
 )
+/**
+ * Artist genres as Spotify publishes them, cached for a week (§5). Keyed by artist because that is
+ * the granularity the API offers; the track-level value is derived from its artists.
+ */
+@Entity(tableName = "artist_genre_cache") data class ArtistGenreEntity(@PrimaryKey val artistId: String, val genresJson: String, val fetchedAt: Long)
+
 /** Handoff exposure for repetition fatigue only. Never evidence of listening. */
 @Entity(tableName = "played") data class PlayedEntity(@PrimaryKey(autoGenerate = true) val rowId: Long = 0, val videoId: String, val playedAt: Long)
 
@@ -105,17 +114,21 @@ class Preferences(private val context: Context) {
     @Query("DELETE FROM candidates") suspend fun clearCandidates()
     @Query("DELETE FROM candidates WHERE videoId IN (:ids)") suspend fun deleteCandidates(ids: List<String>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putArtistGenres(rows: List<ArtistGenreEntity>)
+    @Query("SELECT * FROM artist_genre_cache WHERE fetchedAt >= :cutoff") suspend fun artistGenres(cutoff: Long): List<ArtistGenreEntity>
+    @Query("DELETE FROM artist_genre_cache") suspend fun clearArtistGenres()
+
     @Insert suspend fun putPlayed(row: PlayedEntity)
     @Query("SELECT videoId FROM played WHERE playedAt >= :since") suspend fun playedSince(since: Long): List<String>
     @Query("DELETE FROM played WHERE playedAt < :cutoff") suspend fun prunePlayed(cutoff: Long)
     @Query("DELETE FROM played") suspend fun clearPlayed()
 }
 
-@Database(entities = [RuleEntity::class, HistoryEntity::class, CandidateEntity::class, PlayedEntity::class, IntelligenceState::class, BatchEntity::class, OutcomeEntity::class,
+@Database(entities = [RuleEntity::class, HistoryEntity::class, CandidateEntity::class, PlayedEntity::class, ArtistGenreEntity::class, IntelligenceState::class, BatchEntity::class, OutcomeEntity::class,
     TrackEntity::class, TrackIdentifierEntity::class, PlayableRefEntity::class, MetadataAssertionEntity::class, DiscoveryItemEntity::class, EnrichmentJobEntity::class, ValidationDecisionEntity::class,
     IdentityAliasEntity::class, TrackExperienceEntity::class, UserTrackContextEntity::class, DiscoverySeedEntity::class, CollectionRunEntity::class, CollectionControlEntity::class, QuotaLedgerEntity::class, IntegrationConfigEntity::class,
     PlaybackAttemptEntity::class, PlaybackEventEntity::class],
-    version = 5, exportSchema = true)
+    version = 6, exportSchema = true)
 abstract class DriveDatabase: RoomDatabase() {
     abstract fun dao(): DriveDao
     abstract fun intelligence(): IntelligenceDao
@@ -205,9 +218,21 @@ abstract class DriveDatabase: RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_event_observedAt` ON `playback_event` (`observedAt`)")
             }
         }
+        /**
+         * Phase 1 §5: candidates arrived with an empty genre list, so the survey's genre questions
+         * could not act on anything. Additive, and the approximation keeps its own columns.
+         */
+        private val MIGRATION_5_6 = object : Migration(5,6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `candidates` ADD COLUMN `energyHint` REAL")
+                db.execSQL("ALTER TABLE `candidates` ADD COLUMN `energyBasis` TEXT")
+                db.execSQL("ALTER TABLE `candidates` ADD COLUMN `artistIds` TEXT")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `artist_genre_cache` (`artistId` TEXT NOT NULL, `genresJson` TEXT NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`artistId`))")
+            }
+        }
         @Volatile private var instance: DriveDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
+            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
         }
     }
 }

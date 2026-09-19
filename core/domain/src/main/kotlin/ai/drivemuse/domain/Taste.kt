@@ -79,3 +79,43 @@ object SessionRanker {
     }
     fun adjustedDiscovery(base: Double, adjustment: Double)=(base+adjustment.coerceIn(-.05,.05)).coerceIn(.1,.6)
 }
+
+/**
+ * Phase 1 §5. Spotify publishes genres per artist, not per recording, so this is an approximation
+ * of the track and is labelled as one everywhere it lands. It exists because without it Q2 and Q5
+ * have nothing to match on: every candidate arrived with an empty genre list.
+ *
+ * Axes are the seven the survey offers. A Spotify string with no axis is kept verbatim as a topic
+ * rather than forced into the nearest bucket, because a wrong genre is worse than an unknown one.
+ */
+object GenreMap {
+    /** The seven axes the survey offers; anything outside them is left unclassified. */
+    val AXES = setOf("POP","RNB","HIP_HOP","ROCK","JAZZ","CLASSICAL","ELECTRONIC")
+    /** Substring rules, first match wins per axis; a track may legitimately carry several. */
+    private val axisRules = listOf(
+        "HIP_HOP" to listOf("hip hop","hip-hop","hiphop","rap","trap","drill"),
+        "RNB" to listOf("r&b","rnb","soul","funk"),
+        "JAZZ" to listOf("jazz","bossa","swing"),
+        "CLASSICAL" to listOf("classical","orchestra","baroque","opera","piano"),
+        "ELECTRONIC" to listOf("edm","house","techno","electro","trance","dubstep","synthwave"),
+        "ROCK" to listOf("rock","metal","punk","grunge","indie"),
+        "POP" to listOf("pop","ballad","k-pop","kpop","idol")
+    )
+    /** §31: a genre-shaped guess at energy, never presented as a measurement. */
+    const val BASIS = "GENRE_APPROX"
+    private val energyRules = listOf(
+        .3 to listOf("chill","lo-fi","lofi","ambient","sleep","ballad","classical","orchestra","piano","acoustic"),
+        .5 to listOf("jazz","soul","r&b","rnb","bossa","folk"),
+        .7 to listOf("pop","k-pop","kpop","rock","indie","idol"),
+        .8 to listOf("hip hop","hip-hop","hiphop","rap","trap","edm","house","techno","electro","metal","punk")
+    )
+    private fun norm(value: String) = value.lowercase().trim()
+    fun axes(genres: Collection<String>): Set<String> = genres.map(::norm).flatMap { g ->
+        axisRules.filter { (_, keys) -> keys.any { it in g } }.map { it.first }
+    }.toSet()
+    /** Null when nothing matched: an unscored candidate stays neutral rather than inventing a value. */
+    fun energy(genres: Collection<String>): Double? {
+        val hits = genres.map(::norm).flatMap { g -> energyRules.filter { (_, keys) -> keys.any { it in g } }.map { it.first } }
+        return hits.takeIf { it.isNotEmpty() }?.average()
+    }
+}

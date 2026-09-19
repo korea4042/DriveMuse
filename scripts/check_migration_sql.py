@@ -42,4 +42,10 @@ for t in ['playback_attempt','playback_event']:
 db.execute("INSERT INTO playback_attempt VALUES ('a1','t','s',NULL,0,NULL,0,NULL,NULL,'COMMANDED')")
 db.execute("INSERT INTO playback_event VALUES ('e1','a1',0,0,210000,0,'APP_REMOTE')")
 assert db.execute("SELECT count(*) FROM playback_event WHERE attemptId='a1'").fetchone()==(1,)
-print('PASS: additive migrations v1→v5 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables')
+# Phase 1 §5: the genre cache exists and candidates gained the approximation columns without losing a row.
+assert db.execute("SELECT count(*) FROM candidates WHERE videoId='abcdefghijk'").fetchone()==(1,)
+cols=[r[1] for r in db.execute('PRAGMA table_info(candidates)')]
+for c in ['energyHint','energyBasis','artistIds']: assert c in cols, c
+db.execute("INSERT INTO artist_genre_cache VALUES ('a1','[\"k-pop\"]',0)")
+assert db.execute("SELECT genresJson FROM artist_genre_cache WHERE artistId='a1'").fetchone()==('["k-pop"]',)
+print('PASS: additive migrations v1→v6 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre columns')

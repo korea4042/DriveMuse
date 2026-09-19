@@ -1,6 +1,7 @@
 package ai.drivemuse.app
 
 import ai.drivemuse.domain.*
+import ai.drivemuse.app.spotify.GenreEnricher
 import ai.drivemuse.app.spotify.SpotifyIds
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -18,6 +19,7 @@ class MusicRepository(
     private val dao: DriveDao,
     private val prefs: Preferences
 ) {
+    private val enricher = GenreEnricher(spotify, dao)
     private val seedMutex=Mutex()
     /** Survey phrases kept from the last seeding pass, so a thin pool can reuse them. */
     @Volatile private var lastSurveySeeds: List<String> = emptyList()
@@ -71,10 +73,10 @@ class MusicRepository(
      * not, which is what keeps the app useful before the account is linked.
      */
     /** What one pool rebuild actually managed to fetch, so a failure can be explained (§9). */
-    data class RefreshReport(val saved: Int, val top: Int, val artist: Int, val search: Int, val newRelease: Int, val error: String?) {
+    data class RefreshReport(val saved: Int, val top: Int, val artist: Int, val search: Int, val newRelease: Int, val error: String?, val genreTagged: Int = 0) {
         val total get() = saved + top + artist + search + newRelease
         fun describe() = if (error != null) "불러오기 실패: $error"
-            else "저장 ${saved} · 자주 듣는 ${top} · 아티스트 ${artist} · 검색 ${search} · 신규 ${newRelease}"
+            else "저장 ${saved} · 자주 듣는 ${top} · 아티스트 ${artist} · 검색 ${search} · 신규 ${newRelease} · 장르 확인 ${genreTagged}"
     }
     @Volatile var lastReport: RefreshReport? = null
         private set
@@ -117,14 +119,28 @@ class MusicRepository(
                 .map { row(it, familiar = false, affinity = .45, source = "new_release", now = now) }
         }
 
-        if (rows.isNotEmpty()) {
-            dao.putCandidates(rows.distinctBy { it.videoId })
+        // §5: without this the pool stores topics="" and the survey's genre answers do nothing.
+        var unique = rows.distinctBy { it.videoId }
+        var tagged = 0
+        if (unique.isNotEmpty()) {
+            val lookup = enricher.genresFor(unique.flatMap { it.artistIds?.split(",").orEmpty() }, now)
+            lookup.error?.let { if (firstError == null) firstError = it }
+            unique = unique.map { candidate ->
+                val (axes, energy) = enricher.describe(candidate.artistIds?.split(",")?.filter(String::isNotBlank).orEmpty(), lookup.genres)
+                if (axes.isBlank() && energy == null) candidate
+                else { tagged++; candidate.copy(topics = axes, energyHint = energy, energyBasis = energy?.let { GenreMap.BASIS }) }
+            }
+        }
+
+        if (unique.isNotEmpty()) {
+            dao.putCandidates(unique)
             prefs.long("tasteSyncedAt", now)
         }
         return RefreshReport(
             saved = saved.size, top = top.size, artist = artistCount,
             search = rows.count { it.source == "search" }, newRelease = rows.count { it.source == "new_release" },
-            error = if (rows.isEmpty()) (firstError ?: "Spotify가 곡을 돌려주지 않았어요") else null
+            error = if (rows.isEmpty()) (firstError ?: "Spotify가 곡을 돌려주지 않았어요") else null,
+            genreTagged = tagged
         ).also { lastReport = it }
     }
 
@@ -137,6 +153,7 @@ class MusicRepository(
     private fun row(t: ai.drivemuse.app.spotify.SpotifyTrack, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(
         videoId = t.id, title = t.name, artist = t.artists.joinToString(", "),
         durationSec = (t.durationMs / 1000).toInt(), topics = "",
+        artistIds = t.artistIds.joinToString(","),
         familiar = familiar, affinity = affinity,
         // A verified release date, unlike a YouTube upload time (§16 releaseRecency).
         freshness = t.releaseDate?.take(4)?.toIntOrNull()?.let { if (it >= java.time.Year.now().value - 2) .8 else .4 } ?: .5,
@@ -157,18 +174,21 @@ class MusicRepository(
         return rows.map { row ->
             Track(
                 id = row.videoId, title = row.title, artist = row.artist,
-                familiar = row.familiar, energy = row.energy,
+                familiar = row.familiar, energy = row.energy ?: row.energyHint,
                 // A music video ranks below the audio upload of the same song (§30).
                 affinity = (row.affinity - VideoForm.rankPenalty(row.title, row.artist)).coerceIn(0.0, 1.0),
                 // Unknown energy sits at neutral rather than being guessed toward the target.
-                contextFit = row.energy?.let { 1.0 - kotlin.math.abs(it - targetEnergy) } ?: .5,
+                contextFit = (row.energy ?: row.energyHint)?.let { 1.0 - kotlin.math.abs(it - targetEnergy) } ?: .5,
                 freshness = row.freshness,
                 fatigue = ((recentPlays[row.videoId] ?: 0) * .18).coerceAtMost(.7),
                 durationMs=row.durationSec*1000L,
-                features=row.topics.split("|").mapNotNull { topic ->
-                    val genre=when(topic.lowercase().replace(" ","_")) { "pop_music"->"POP";"rhythm_and_blues"->"RNB";"hip_hop_music"->"HIP_HOP";"rock_music"->"ROCK";"jazz"->"JAZZ";"classical_music"->"CLASSICAL";"electronic_music"->"ELECTRONIC";else->null }
-                    genre?.let { VerifiedFeature("genre",it,"YOUTUBE_TOPIC",.85) }
-                } + listOfNotNull(row.audioLanguage?.let { VerifiedFeature("language",it.substringBefore('-'),"YOUTUBE_AUDIO_LANGUAGE",1.0) })
+                features=row.topics.split("|").filter { it.isNotBlank() }.mapNotNull { topic ->
+                    // Spotify rows store the axis itself; the second branch is for YouTube-era rows.
+                    val genre=topic.takeIf { it in GenreMap.AXES }
+                        ?: when(topic.lowercase().replace(" ","_")) { "pop_music"->"POP";"rhythm_and_blues"->"RNB";"hip_hop_music"->"HIP_HOP";"rock_music"->"ROCK";"jazz"->"JAZZ";"classical_music"->"CLASSICAL";"electronic_music"->"ELECTRONIC";else->null }
+                    genre?.let { VerifiedFeature("genre",it,if(topic in GenreMap.AXES) "SPOTIFY_ARTIST_GENRE" else "YOUTUBE_TOPIC",.85) }
+                } + listOfNotNull(row.audioLanguage?.let { VerifiedFeature("language",it.substringBefore('-'),"YOUTUBE_AUDIO_LANGUAGE",1.0) }),
+                energyBasis = if(row.energy!=null) "MEASURED" else row.energyBasis
             )
         }
     }
@@ -180,5 +200,5 @@ class MusicRepository(
 
     private fun note(e: Throwable) = (e.message ?: e::class.simpleName ?: "알 수 없는 오류").take(120)
 
-    suspend fun clearCache() { dao.clearCandidates(); dao.clearPlayed() }
+    suspend fun clearCache() { dao.clearCandidates(); dao.clearPlayed(); dao.clearArtistGenres() }
 }

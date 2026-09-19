@@ -79,3 +79,33 @@ class PlaybackObservationTest {
         assertEquals(.6, EndReasonResolver.resolve(close).confidence)
     }
 }
+
+/** Phase 1 §5, T19–T20: artist genres become axes the survey can act on, or nothing at all. */
+class GenreMapTest {
+    @Test fun spotifyGenresBecomeAxes() {
+        assertEquals(setOf("POP"), GenreMap.axes(listOf("k-pop", "dance pop")))
+        assertEquals(.7, GenreMap.energy(listOf("k-pop", "dance pop")))
+        assertEquals(setOf("HIP_HOP"), GenreMap.axes(listOf("korean hip hop")))
+        assertEquals(setOf("CLASSICAL"), GenreMap.axes(listOf("classical piano")))
+    }
+
+    /** A track can sit on two axes; the map does not pick a winner it has no basis to pick. */
+    @Test fun severalAxesAreKept() {
+        assertEquals(setOf("ROCK", "POP"), GenreMap.axes(listOf("indie rock", "art pop")))
+    }
+
+    /** Unrecognised strings produce no axis and no energy rather than a nearest guess. */
+    @Test fun unknownGenreProducesNothing() {
+        assertTrue(GenreMap.axes(listOf("gqom", "")).isEmpty())
+        assertNull(GenreMap.energy(listOf("gqom")))
+    }
+
+    /** T20: a candidate with no confirmed genre survives an exclusion (SEL01). */
+    @Test fun emptyGenreSurvivesExclusion() {
+        val unknown = Track("abcdefghijklmnopqrstuv", "A", "B")
+        val classical = Track("abcdefghijklmnopqrstuw", "A", "B", features = listOf(VerifiedFeature("genre", "CLASSICAL", "SPOTIFY_ARTIST_GENRE", .8)))
+        val constraints = Constraints(excludedGenres = setOf("CLASSICAL"))
+        assertTrue(constraints.allows(unknown))
+        assertFalse(constraints.allows(classical))
+    }
+}
