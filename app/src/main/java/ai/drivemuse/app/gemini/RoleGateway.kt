@@ -15,7 +15,7 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /** v2.3 §10: versions are pinned per role. common-guard stays 2.1; selector and metadata-interpreter moved to 2.3, discovery-planner is 2.2. */
-enum class Role(val wire: String, val version: String) { SURVEY("taste-intake","2.1"), CONTEXT("context-interpreter","2.1"), REVIEW("listening-reviewer","2.1"), SELECTOR("selector","2.5"), METADATA("metadata-interpreter","2.3"), DISCOVERY("discovery-planner","2.2") }
+enum class Role(val wire: String, val version: String) { SURVEY("taste-intake","2.1"), CONTEXT("context-interpreter","2.1"), REVIEW("listening-reviewer","2.1"), SELECTOR("selector","2.6"), METADATA("metadata-interpreter","2.3"), DISCOVERY("discovery-planner","2.2") }
 object JsonGate {
     fun keys(j: JSONObject, vararg keys: String) { require(j.keys().asSequence().toSet()==keys.toSet()) }
     fun string(j: JSONObject, key: String, max: Int=160): String { val v=j.get(key);require(v is String && v.length<=max);return v }

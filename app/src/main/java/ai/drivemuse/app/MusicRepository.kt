@@ -153,7 +153,7 @@ class MusicRepository(
     private fun row(t: ai.drivemuse.app.spotify.SpotifyTrack, familiar: Boolean, affinity: Double, source: String, now: Long) = CandidateEntity(
         videoId = t.id, title = t.name, artist = t.artists.joinToString(", "),
         durationSec = (t.durationMs / 1000).toInt(), topics = "",
-        artistIds = t.artistIds.joinToString(","),
+        artistIds = t.artistIds.joinToString(","), popularity = t.popularity,
         familiar = familiar, affinity = affinity,
         // A verified release date, unlike a YouTube upload time (§16 releaseRecency).
         freshness = t.releaseDate?.take(4)?.toIntOrNull()?.let { if (it >= java.time.Year.now().value - 2) .8 else .4 } ?: .5,
@@ -188,7 +188,8 @@ class MusicRepository(
                         ?: when(topic.lowercase().replace(" ","_")) { "pop_music"->"POP";"rhythm_and_blues"->"RNB";"hip_hop_music"->"HIP_HOP";"rock_music"->"ROCK";"jazz"->"JAZZ";"classical_music"->"CLASSICAL";"electronic_music"->"ELECTRONIC";else->null }
                     genre?.let { VerifiedFeature("genre",it,if(topic in GenreMap.AXES) "SPOTIFY_ARTIST_GENRE" else "YOUTUBE_TOPIC",.85) }
                 } + listOfNotNull(row.audioLanguage?.let { VerifiedFeature("language",it.substringBefore('-'),"YOUTUBE_AUDIO_LANGUAGE",1.0) }),
-                energyBasis = if(row.energy!=null) "MEASURED" else row.energyBasis
+                energyBasis = if(row.energy!=null) "MEASURED" else row.energyBasis,
+                popularity = row.popularity
             )
         }
     }

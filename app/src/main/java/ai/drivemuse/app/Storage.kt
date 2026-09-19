@@ -109,7 +109,9 @@ class Preferences(private val context: Context) {
     val source: String, val fetchedAt: Long, val audioLanguage: String? = null,
     // §5: an approximation derived from artist genres, kept apart from the measured `energy`
     // column so nothing downstream can mistake it for one.
-    val energyHint: Double? = null, val energyBasis: String? = null, val artistIds: String? = null
+    val energyHint: Double? = null, val energyBasis: String? = null, val artistIds: String? = null,
+    /** Provider popularity 0-100. Parsed since the Spotify switch but never stored until now. */
+    val popularity: Int? = null
 )
 /**
  * Artist genres as Spotify publishes them, cached for a week (§5). Keyed by artist because that is
@@ -152,7 +154,7 @@ class Preferences(private val context: Context) {
     TrackEntity::class, TrackIdentifierEntity::class, PlayableRefEntity::class, MetadataAssertionEntity::class, DiscoveryItemEntity::class, EnrichmentJobEntity::class, ValidationDecisionEntity::class,
     IdentityAliasEntity::class, TrackExperienceEntity::class, UserTrackContextEntity::class, DiscoverySeedEntity::class, CollectionRunEntity::class, CollectionControlEntity::class, QuotaLedgerEntity::class, IntegrationConfigEntity::class,
     PlaybackAttemptEntity::class, PlaybackEventEntity::class],
-    version = 6, exportSchema = true)
+    version = 7, exportSchema = true)
 abstract class DriveDatabase: RoomDatabase() {
     abstract fun dao(): DriveDao
     abstract fun intelligence(): IntelligenceDao
@@ -254,9 +256,15 @@ abstract class DriveDatabase: RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `artist_genre_cache` (`artistId` TEXT NOT NULL, `genresJson` TEXT NOT NULL, `fetchedAt` INTEGER NOT NULL, PRIMARY KEY(`artistId`))")
             }
         }
+        /** Recognisability: the field was already coming back from the API and being thrown away. */
+        private val MIGRATION_6_7 = object : Migration(6,7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `candidates` ADD COLUMN `popularity` INTEGER")
+            }
+        }
         @Volatile private var instance: DriveDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build().also { instance = it }
+            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build().also { instance = it }
         }
     }
 }

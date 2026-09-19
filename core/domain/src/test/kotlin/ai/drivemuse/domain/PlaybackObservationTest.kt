@@ -135,3 +135,43 @@ class SameArtistFillTest {
         assertEquals(listOf("Solo", "Solo"), SessionRanker.select(pool, EffectiveRules(.35, 1.0), DiscoveryProgress(), count = 2).map { it.artist })
     }
 }
+
+/** Diversity and recognisability: a batch must not be one artist, and new must not mean obscure. */
+class BatchDiversityTest {
+    private fun track(id: String, artist: String, affinity: Double = .8, popularity: Int? = null, familiar: Boolean = true) =
+        Track(id.padEnd(22, 'x'), "T$id", artist, familiar = familiar, affinity = affinity, popularity = popularity)
+
+    /** A pool dominated by one artist still yields a varied batch. */
+    @Test fun oneArtistCannotOwnTheBatch() {
+        val pool = (1..12).map { track("a$it", "Dominant", .9) } + (1..6).map { track("b$it", "Other$it", .5) }
+        val chosen = SessionRanker.select(pool, EffectiveRules(.35, 1.0), DiscoveryProgress())
+        assertEquals(Policy.BATCH_SIZE, chosen.size)
+        assertEquals(Policy.MAX_PER_ARTIST, chosen.count { it.artist == "Dominant" })
+    }
+
+    /** The cap yields rather than return a short batch, per §30. */
+    @Test fun capNeverShrinksTheBatch() {
+        val pool = (1..10).map { track("a$it", "Solo") }
+        assertEquals(Policy.BATCH_SIZE, SessionRanker.select(pool, EffectiveRules(.35, 1.0), DiscoveryProgress()).size)
+    }
+
+    /** Between two equally good unheard tracks, the one people actually play wins. */
+    @Test fun recognisabilityBreaksTies() {
+        val known = track("k", "A", .6, popularity = 80, familiar = false)
+        val obscure = track("o", "B", .6, popularity = 5, familiar = false)
+        assertEquals("A", SessionRanker.select(listOf(obscure, known), EffectiveRules(.35, 1.0), DiscoveryProgress(), count = 1).single().artist)
+    }
+
+    /** Missing popularity is neutral, so a track without the field is not pushed to the bottom. */
+    @Test fun unknownPopularityIsNeutral() {
+        assertEquals(.5, track("u", "A").recognisability)
+        assertEquals(.8, track("v", "A", popularity = 80).recognisability)
+    }
+
+    /** Recognisability is a nudge: a much better match still beats a more famous track. */
+    @Test fun recognisabilityDoesNotOverridePreference() {
+        val liked = track("l", "A", .95, popularity = 10)
+        val famous = track("f", "B", .30, popularity = 100)
+        assertEquals("A", SessionRanker.select(listOf(famous, liked), EffectiveRules(.35, 1.0), DiscoveryProgress(), count = 1).single().artist)
+    }
+}

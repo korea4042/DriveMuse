@@ -55,7 +55,17 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * scores survive a restart instead of resetting every time the app is reopened.
      */
     @Volatile private var sessionId=UUID.randomUUID().toString()
-    private suspend fun touchSession() { runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } } }
+    /**
+     * Everything already offered this session. "다른 믹스" re-ranked the same pool with the same
+     * deterministic comparator, so it returned the same tracks and looked broken. Remembering what
+     * was shown is what makes a re-roll actually roll.
+     */
+    private val offered=java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private suspend fun touchSession() {
+        val previous=sessionId
+        runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } }
+        if(sessionId!=previous) offered.clear()
+    }
     private var firstMoodSession: String?=null
     private var progress=DiscoveryProgress()
     private var seedRevision=-1L
@@ -263,9 +273,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             val snapshot = ui.value
             val draft=survey.value?:return
             val revision=draft.revision
-            // Appending must not repeat what is already queued or still playing. Only the batch now
-            // playing is carried forward, so the list and the observer's plan stay at six.
-            val excluded = if(append) snapshot.queue.map { it.id }.toSet() else emptySet()
+            // Appending must not repeat what is already queued or still playing. A manual re-roll
+            // must not repeat what this session has already been offered, or it is not a re-roll.
+            var excluded = if(append) snapshot.queue.map { it.id }.toSet()
+                else synchronized(offered) { offered.toSet() } + snapshot.queue.map { it.id }
             val carried = if(append) snapshot.queue.takeLast(Policy.BATCH_SIZE) else emptyList()
             try {
                 val config = prefs.flow.first()
@@ -280,8 +291,18 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 }
                 val p=profile();val constraints=Constraints(excludedGenres=p.exclusions)
                 val scores = learning.scores(sessionId,System.currentTimeMillis())
-                fun rank(pool: List<Track>) = TasteRanker.prepare(pool.filter { it.id !in excluded },p,constraints,scores).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
+                // Recognisability belongs in the cut to forty too: a well-known track that never
+                // reaches the shortlist can never be chosen from it.
+                fun rank(pool: List<Track>) = TasteRanker.prepare(pool.filter { it.id !in excluded },p,constraints,scores).filter { effective.allowsEnergy(it) }
+                    .sortedByDescending { it.affinity + Policy.RECOGNISABILITY_WEIGHT*it.recognisability - it.fatigue }.take(40)
                 var prepared = rank(tracks)
+                if (prepared.isEmpty() && !snapshot.demo && offered.isNotEmpty() && !append) {
+                    // Every remaining candidate has already been offered. Starting the rotation over
+                    // is the right answer; refusing to play anything is not.
+                    offered.clear()
+                    excluded = snapshot.queue.map { it.id }.toSet()
+                    prepared = rank(tracks)
+                }
                 if (prepared.isEmpty() && !snapshot.demo) {
                     // SEL04: top up once, then re-read and re-rank inside the same request. Never loop.
                     val report = runCatching { repository.refreshReport(config) }.getOrNull()
@@ -322,6 +343,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 // T22: a proposal built on a queue revision that has since moved is discarded whole.
                 if(append && !scheduler.accepts(baseRevision!!)) return
                 progress=progress.append(queue)
+                offered.addAll(queue.map { it.id })
                 if(append) appendToPlayer(carried,queue)
                 mutable.update { it.copy(queue=if(append) carried+queue else queue,queueStale=false,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))

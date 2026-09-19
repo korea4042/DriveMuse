@@ -74,9 +74,15 @@ object SessionRanker {
         while(result.size<count && pool.isNotEmpty()) {
             val wantNew=progress.discoveries+result.count { !it.familiar } < (progress.total+result.size+1)*rules.discovery
             // QUE03: back-to-back by the same artist is worth avoiding, but not worth returning a
-            // short batch for. A library of one artist still gets three tracks.
-            fun rank(t: Track)= .4*t.affinity+.25*t.contextFit+.15*t.freshness-t.fatigue-(if(t.artist==result.lastOrNull()?.artist) REPEAT_ARTIST_PENALTY else 0.0)
-            val ordered=pool.sortedByDescending(::rank)
+            // short batch for. A library of one artist still fills the batch.
+            fun rank(t: Track)= .4*t.affinity+.25*t.contextFit+.15*t.freshness+
+                Policy.RECOGNISABILITY_WEIGHT*t.recognisability-t.fatigue-
+                (if(t.artist==result.lastOrNull()?.artist) REPEAT_ARTIST_PENALTY else 0.0)
+            // The cap is applied by narrowing the field, not by rejecting the pick: if nothing is
+            // left under the cap, the batch is filled anyway rather than returned short.
+            val counts=result.groupingBy { it.artist }.eachCount()
+            val room=pool.filter { (counts[it.artist]?:0) < Policy.MAX_PER_ARTIST }.ifEmpty { pool }
+            val ordered=room.sortedByDescending(::rank)
             val next=ordered.firstOrNull { !it.familiar==wantNew }?:ordered.first(); result+=next; pool.remove(next)
         }
         return result

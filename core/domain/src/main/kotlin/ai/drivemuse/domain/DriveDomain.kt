@@ -50,14 +50,22 @@ object RuleEngine {
 }
 data class Track(val id: String, val title: String, val artist: String, val familiar: Boolean = false, val energy: Double? = null, val affinity: Double = .5, val contextFit: Double = .5, val freshness: Double = .5, val fatigue: Double = 0.0, val skipped: Boolean = false, val durationMs: Long? = null, val features: List<VerifiedFeature> = emptyList(),
     // §5/§31: where `energy` came from. GENRE_APPROX is a guess from artist genres, not a measurement.
-    val energyBasis: String? = null)
+    val energyBasis: String? = null,
+    /**
+     * Provider popularity, 0–100. Recognisability, not quality and not preference: it says how many
+     * people are playing this, nothing about whether this listener will like it.
+     */
+    val popularity: Int? = null) {
+    /** Unknown popularity is neutral, never treated as obscure. */
+    val recognisability get() = (popularity?.coerceIn(0, 100)?.div(100.0)) ?: .5
+}
 object Ranker {
     /**
      * Technical design v1.2 §6.9. The provider_relevance term is gone: the YouTube Data API
      * exposes no personalised ranking signal, so its weight moves onto locally derived affinity.
      */
     fun select(tracks: List<Track>, rules: EffectiveRules, count: Int = Policy.BATCH_SIZE): List<Track> {
-        val pool = tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.sortedByDescending { .40 * it.affinity + .25 * it.contextFit + .20 * (if (it.familiar) 0.0 else 1.0) + .15 * it.freshness - it.fatigue }.toMutableList()
+        val pool = tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.sortedByDescending { .40 * it.affinity + .25 * it.contextFit + .20 * (if (it.familiar) 0.0 else 1.0) + .15 * it.freshness + Policy.RECOGNISABILITY_WEIGHT * it.recognisability - it.fatigue }.toMutableList()
         val selected = mutableListOf<Track>()
         while (pool.isNotEmpty() && selected.size < count) {
             val wantNew = selected.count { !it.familiar } < (selected.size + 1) * rules.discovery
@@ -87,6 +95,14 @@ object Policy {
      * later instead of three, and the model is called roughly a third as often.
      */
     const val BATCH_SIZE = 8
+    /**
+     * Most tracks one artist may hold in a batch. A pool built from a few favourite artists' top
+     * tracks is heavily skewed, so without a cap a batch of eight can be one artist eight times.
+     * Soft: if the pool cannot fill the batch otherwise, a full batch wins over the cap (§30).
+     */
+    const val MAX_PER_ARTIST = 2
+    /** How much recognisability counts. Discovery should mean unheard, not obscure. */
+    const val RECOGNISABILITY_WEIGHT = .20
     /** v1 requests youtube.readonly only. Write scopes are requested per feature, never at onboarding. */
     const val SCOPE_READONLY = "https://www.googleapis.com/auth/youtube.readonly"
     /** Provider track ids: a Spotify id is 22 base62 characters, an older YouTube id is 11. */
