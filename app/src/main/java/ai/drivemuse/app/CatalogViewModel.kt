@@ -93,11 +93,17 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
     /** Spotify sign-in and sign-out; the redirect comes back through MainActivity. */
     fun spotifyAuthorizeIntent() = runtime.spotifyAuth.authorizeIntent()
     val spotifyLinked get() = runtime.spotifyAuth.linked
-    fun onSpotifyRedirect(uri: android.net.Uri) {
-        viewModelScope.launch {
-            val error = runtime.spotifyAuth.onRedirect(uri)
-            messageMutable.value = if (error == null) "Spotify 계정을 연결했습니다" else "Spotify 연결 실패 · $error"
+    /** Resolves to true only when the token exchange succeeded (AUTH01). */
+    suspend fun onSpotifyRedirect(uri: android.net.Uri): Boolean {
+        val error = runtime.spotifyAuth.onRedirect(uri)
+        messageMutable.value = when (error) {
+            null -> "Spotify 계정을 연결했습니다"
+            "cancelled" -> "Spotify 연결을 취소했습니다"
+            "no_pending_attempt" -> null   // duplicate delivery of an already-consumed redirect
+            "state_mismatch" -> "Spotify 연결 요청이 일치하지 않아요. 다시 시도해 주세요"
+            else -> "Spotify 연결 실패 · $error"
         }
+        return error == null
     }
     fun spotifySignOut() { runtime.spotifyAuth.signOut(); messageMutable.value = "Spotify 연결을 해제했습니다" }
 

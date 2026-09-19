@@ -4,9 +4,14 @@ import android.content.Context
 import com.spotify.android.appremote.api.ConnectionParams
 import com.spotify.android.appremote.api.Connector
 import com.spotify.android.appremote.api.SpotifyAppRemote
+import com.spotify.protocol.client.CallResult
+import com.spotify.protocol.types.Empty
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.resume
@@ -85,15 +90,31 @@ class SpotifyRemote(private val clientId: () -> String?) {
 
     fun disconnect() { remote?.let { SpotifyAppRemote.disconnect(it) }; remote = null; stateMutable.value = null }
 
-    /** Starts one recording. The caller confirms the start from the state subscription (§3 L2). */
-    fun play(trackId: String): Boolean {
-        val api = remote?.takeIf { it.isConnected }?.playerApi ?: return false
-        api.play("spotify:track:$trackId"); return true
+    /** Waits for the SDK's own result instead of trusting that the call returned (PLAY01). */
+    private suspend fun await(call: CallResult<Empty>, timeoutMs: Long = 8_000): String? = withTimeoutOrNull(timeoutMs) {
+        suspendCancellableCoroutine<String?> { cont ->
+            call.setResultCallback { if (cont.isActive) cont.resume(null) }
+            call.setErrorCallback { e -> if (cont.isActive) cont.resume(explain(e)) }
+        }
+    } ?: "Spotify가 ${timeoutMs / 1000}초 안에 응답하지 않았어요"
+
+    /**
+     * Starts one recording and returns null only once the player reports that track as the current
+     * one. The command being accepted is not enough: another track may still be current, or the
+     * player may have refused silently.
+     */
+    suspend fun playAndConfirm(trackId: String, confirmMs: Long = 10_000): String? {
+        val api = remote?.takeIf { it.isConnected }?.playerApi ?: return "Spotify에 연결되지 않았어요"
+        await(api.play("spotify:track:$trackId"))?.let { return it }
+        val started = withTimeoutOrNull(confirmMs) {
+            state.filterNotNull().first { it.trackId == trackId && !it.paused }
+        }
+        return if (started != null) null else "재생 시작을 확인하지 못했어요 (다른 곡이 재생 중이거나 응답 없음)"
     }
 
-    fun queue(trackId: String): Boolean {
-        val api = remote?.takeIf { it.isConnected }?.playerApi ?: return false
-        api.queue("spotify:track:$trackId"); return true
+    suspend fun queueAwait(trackId: String): String? {
+        val api = remote?.takeIf { it.isConnected }?.playerApi ?: return "Spotify에 연결되지 않았어요"
+        return await(api.queue("spotify:track:$trackId"))
     }
 
     fun next(): Boolean { remote?.takeIf { it.isConnected }?.playerApi?.skipNext() ?: return false; return true }

@@ -216,10 +216,20 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                     repository.candidates(snapshot.context, config)
                 }
                 val p=profile();val constraints=Constraints(excludedGenres=p.exclusions)
-                val prepared=TasteRanker.prepare(tracks,p,constraints,learning.scores(sessionId,System.currentTimeMillis())).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
-                if (prepared.isEmpty()) {
+                fun rank(pool: List<Track>) = TasteRanker.prepare(pool,p,constraints,learning.scores(sessionId,System.currentTimeMillis())).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
+                var prepared = rank(tracks)
+                if (prepared.isEmpty() && !snapshot.demo) {
+                    // SEL04: top up once, then re-read and re-rank inside the same request. Never loop.
                     val report = runCatching { repository.refreshReport(config) }.getOrNull()
-                    error("추천할 후보가 없어요 · " + (report?.describe() ?: "Spotify에서 곡을 가져오지 못했습니다"))
+                    val refilled = repository.candidates(snapshot.context, config)
+                    prepared = rank(refilled)
+                    if (prepared.isEmpty()) {
+                        val reason = when {
+                            refilled.isEmpty() -> "Spotify에서 가져온 후보가 없어요 · " + (report?.describe() ?: "조회 실패")
+                            else -> "후보 ${refilled.size}곡이 모두 확인된 제외 조건에 걸렸어요. 설문의 제외 장르를 확인해 주세요"
+                        }
+                        error(reason)
+                    }
                 }
                 val fallback=SessionRanker.select(prepared,effective,progress)
                 val outcomes=intelligence.outcomes().filter { it.sessionId==sessionId }.sortedBy { it.createdAt }.map(learning::outcome)
@@ -271,28 +281,55 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private fun cancelSelection() { selectionGeneration++; selectionJob?.cancel(); selectionJob=null; mutable.update { it.copy(busy=false) } }
     fun suspendAgent() { cancelSelection(); viewModelScope.launch { coordinator.invalidate();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
 
-    /** §30: play the exact recording through App Remote and queue the rest of the batch. */
+    /** One in-flight playback request at a time: a double tap must not queue the batch twice (QUE02). */
+    private var playbackJob: Job? = null
+
+    /**
+     * §30, PLAY01/02, QUE02: play the selected recording, confirm that it actually started, then
+     * append only the tracks that follow it in the batch. Both transports follow this same plan.
+     */
     fun handoff(track: Track?) {
         if (track == null) { message("재생할 곡이 없습니다"); return }
         if (!ai.drivemuse.app.spotify.SpotifyIds.isTrackId(track.id)) { message("예전 목록의 곡이에요. 설정에서 후보를 새로 불러와 주세요"); return }
         if (!Constraints(excludedGenres = profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다"); return }
-        viewModelScope.launch {
+        if (playbackJob?.isActive == true) { message("재생 요청을 처리하는 중이에요"); return }
+        val batch = ui.value.queue
+        val following = batch.dropWhile { it.id != track.id }.drop(1).filter { it.id != track.id }.distinctBy { it.id }
+        playbackJob = viewModelScope.launch {
             message("Spotify에 연결하는 중…")
-            val failure = runtime.spotifyRemote.connect(getApplication())
-            if (failure != null || !runtime.spotifyRemote.play(track.id)) {
-                // App Remote could not bind; a device that is already awake can still take a Web API command.
-                val fallback = runCatching { runtime.spotify.play(track.id) }
-                if (fallback.isSuccess) message("${track.artist} ${track.title} 재생 중 (Web API)")
-                else message((failure ?: "App Remote 명령 실패") + " · Web API: " + (fallback.exceptionOrNull()?.message ?: "실패"))
-                return@launch
+            val remote = runtime.spotifyRemote
+            var transport = "App Remote"
+            var failure = remote.connect(getApplication())
+            if (failure == null) failure = remote.playAndConfirm(track.id)
+            if (failure != null) {
+                // A device that is already awake can still take a Web API command; same plan, other pipe.
+                transport = "Web API"
+                val web = runCatching { runtime.spotify.play(track.id) }
+                val confirmed = web.isSuccess && confirmViaWebApi(track.id)
+                if (!confirmed) {
+                    message(failure + (web.exceptionOrNull()?.let { " · Web API: ${it.message}" } ?: " · Web API: 시작 확인 실패"))
+                    return@launch
+                }
             }
-            message("${track.artist} ${track.title} 재생 중")
-            // Exposure only (§17 EXPOSED_ONLY); a listening outcome needs observed playback.
-            if (!ui.value.demo) {
-                repository.recordPlay(track.id)
-                ui.value.queue.filter { it.id != track.id }.forEach { runtime.spotifyRemote.queue(it.id) }
+            // Exposure only (§17 EXPOSED_ONLY); the listening outcome comes from observation.
+            if (!ui.value.demo) repository.recordPlay(track.id)
+            var queued = 0
+            for (next in following) {
+                val err = if (transport == "App Remote") remote.queueAwait(next.id) else runCatching { runtime.spotify.queue(next.id) }.exceptionOrNull()?.message
+                if (err == null) queued++
             }
+            message("${track.artist} ${track.title} 재생 시작" + (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기") + " ($transport)")
         }
+    }
+
+    /** Polls /me/player briefly until the requested track is the current one. */
+    private suspend fun confirmViaWebApi(trackId: String): Boolean {
+        repeat(5) {
+            val state = runCatching { runtime.spotify.playback() }.getOrNull()
+            if (state?.trackId == trackId && state.playing) return true
+            kotlinx.coroutines.delay(1500)
+        }
+        return false
     }
 
     fun parseRule(text: String) {

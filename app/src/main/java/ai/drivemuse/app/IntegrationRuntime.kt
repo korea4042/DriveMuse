@@ -7,7 +7,6 @@ import ai.drivemuse.app.knowledge.*
 import ai.drivemuse.app.onboarding.SurveyStore
 import ai.drivemuse.app.spotify.SpotifyApi
 import ai.drivemuse.app.spotify.SpotifyAuth
-import ai.drivemuse.app.spotify.SpotifyPlayback
 import ai.drivemuse.app.spotify.SpotifyRemote
 import ai.drivemuse.domain.*
 import android.content.Context
@@ -54,7 +53,6 @@ class IntegrationRuntime private constructor(context: Context) {
     val spotify = SpotifyApi(spotifyAuth)
     /** App Remote: starts the Spotify app itself, so nothing has to be open beforehand. */
     val spotifyRemote = SpotifyRemote { runBlocking { integrations.active(ProviderId.SPOTIFY).clientId } }
-    val spotifyPlayback = SpotifyPlayback(spotify, spotifyRemote, context.applicationContext)
     val coordinator = DiscoveryCoordinator(db, youtube, registry)
     val surveyStore = SurveyStore(db)
     val prefs = Preferences(context)

@@ -76,7 +76,11 @@ class SpotifyApi(private val auth: SpotifyAuth) {
                     }
                     throw SpotifyUnavailable(reason(detail, 400, where))
                 }
-                401 -> throw SpotifyAuthRequired()
+                401 -> {
+                    // A cached token can expire early; refresh and retry once before asking to sign in.
+                    if (retry) { auth.invalidateAccessToken(); c.disconnect(); return@withContext request(method, path, params, body, retry = false) }
+                    throw SpotifyAuthRequired()
+                }
                 403 -> {
                     val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()
                     if ("premium" in detail.lowercase()) throw SpotifyPremiumRequired() else throw SpotifyUnavailable(reason(detail, code, where))

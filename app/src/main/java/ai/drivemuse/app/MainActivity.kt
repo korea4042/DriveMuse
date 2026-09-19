@@ -67,7 +67,7 @@ class MainActivity: ComponentActivity() {
     val redirectFlow = remember(redirect) { redirect ?: MutableStateFlow<android.net.Uri?>(null) }
     val pendingRedirect by redirectFlow.collectAsStateWithLifecycle()
     LaunchedEffect(pendingRedirect) {
-        pendingRedirect?.takeIf { it.scheme == "drivemuse" }?.let { uri -> cvm.onSpotifyRedirect(uri); vm.onSpotifyLinked(); redirectFlow.value = null }
+        pendingRedirect?.takeIf { it.scheme == "drivemuse" }?.let { uri -> redirectFlow.value = null; if (cvm.onSpotifyRedirect(uri)) vm.onSpotifyLinked() }
     }
     // Sideloaded builds have no store behind them: check and fetch on launch, prompt when parked.
     val updateState by UpdateManager.state.collectAsStateWithLifecycle()

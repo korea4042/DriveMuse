@@ -16,6 +16,9 @@ import javax.net.ssl.HttpsURLConnection
 
 /** Raised when a Spotify call needs the user to sign in again. */
 class SpotifyAuthRequired(message: String = "Spotify 계정 연결이 필요합니다") : IllegalStateException(message)
+/** Raised when the credential is fine but the token service could not be reached. */
+class SpotifyTemporarilyUnavailable(message: String) : IllegalStateException(message)
+private class RevokedException : IllegalStateException("invalid_grant")
 
 /**
  * Technical design v2.3 §22, adapted for Spotify. An installed app cannot keep a client secret,
@@ -42,7 +45,17 @@ class SpotifyAuth(
     private val mutex = Mutex()
     @Volatile private var accessToken: String? = null
     @Volatile private var expiresAt = 0L
-    @Volatile private var verifier: String? = null
+    /**
+     * One pending attempt survives the app process being recreated by the browser: verifier and
+     * state are kept in app-private storage for ten minutes and cleared on first use.
+     */
+    private val pending = context.getSharedPreferences("spotify_auth_attempt", Context.MODE_PRIVATE)
+    private var verifier: String?
+        get() = pending.getString("verifier", null)?.takeIf { System.currentTimeMillis() < pending.getLong("expiresAt", 0) }
+        set(value) { pending.edit().apply { if (value == null) clear() else putString("verifier", value).putLong("expiresAt", System.currentTimeMillis() + 600_000) }.apply() }
+    private var expectedState: String?
+        get() = pending.getString("state", null)
+        set(value) { pending.edit().apply { if (value == null) remove("state") else putString("state", value) }.apply() }
 
     val linked get() = !readRefresh().isNullOrBlank()
 
@@ -51,26 +64,39 @@ class SpotifyAuth(
         val id = clientId()?.trim().orEmpty()
         if (id.isBlank()) return null
         val v = randomString(64).also { verifier = it }
+        val state = randomString(16).also { expectedState = it }
         val challenge = base64Url(MessageDigest.getInstance("SHA-256").digest(v.toByteArray(Charsets.US_ASCII)))
         val url = "https://accounts.spotify.com/authorize?" + listOf(
             "client_id" to id, "response_type" to "code", "redirect_uri" to REDIRECT,
             "code_challenge_method" to "S256", "code_challenge" to challenge,
-            "scope" to SCOPES.joinToString(" "), "state" to randomString(16)
+            "scope" to SCOPES.joinToString(" "), "state" to state
         ).joinToString("&") { (k, value) -> k + "=" + URLEncoder.encode(value, "UTF-8") }
         return Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
-    /** Consumes the redirect. Returns the error description when Spotify refused. */
+    /**
+     * Consumes the redirect. Returns null only when the token exchange succeeded; the caller must
+     * not treat the account as linked before then. A state mismatch, a stale or duplicate callback
+     * and a user cancel are all distinct non-success results.
+     */
     suspend fun onRedirect(uri: Uri): String? {
-        uri.getQueryParameter("error")?.let { return it }
+        if (uri.scheme != "drivemuse" || uri.host != "spotify-callback") return "unexpected_redirect"
+        val state = uri.getQueryParameter("state")
+        val expected = expectedState
+        if (expected == null) return "no_pending_attempt"           // duplicate or stale callback
+        if (state != expected) return "state_mismatch"
+        uri.getQueryParameter("error")?.let { verifier = null; return if (it == "access_denied") "cancelled" else it }
         val code = uri.getQueryParameter("code") ?: return "code_missing"
-        val v = verifier ?: return "verifier_missing"
+        val v = verifier ?: return "verifier_expired"
         val id = clientId()?.trim().orEmpty().ifBlank { return "client_id_missing" }
+        // Clear before the network call so a second delivery of the same redirect cannot reuse it.
+        verifier = null
         return try {
             val body = form(mapOf(
                 "grant_type" to "authorization_code", "code" to code,
                 "redirect_uri" to REDIRECT, "client_id" to id, "code_verifier" to v))
-            store(token(body)); verifier = null; null
+            store(token(body)); null
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e
         } catch (e: Exception) { e.message ?: "token_exchange_failed" }
     }
 
@@ -82,12 +108,22 @@ class SpotifyAuth(
         if (id.isBlank()) throw SpotifyAuthRequired("Spotify Client ID가 필요합니다")
         val json = try {
             token(form(mapOf("grant_type" to "refresh_token", "refresh_token" to refresh, "client_id" to id)))
-        } catch (e: Exception) { writeRefresh(null); throw SpotifyAuthRequired() }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e
+        } catch (e: RevokedException) {
+            // invalid_grant is the only answer that means the credential itself is dead.
+            writeRefresh(null); throw SpotifyAuthRequired()
+        } catch (e: Exception) {
+            // Network, timeout, 5xx: keep the credential and report a temporary failure instead.
+            throw SpotifyTemporarilyUnavailable(e.message ?: "네트워크를 확인해 주세요")
+        }
         store(json)
         accessToken ?: throw SpotifyAuthRequired()
     }
 
-    fun signOut() { accessToken = null; expiresAt = 0; writeRefresh(null) }
+    fun signOut() { accessToken = null; expiresAt = 0; writeRefresh(null); verifier = null }
+
+    /** Drops the cached access token so the next call refreshes (used after a 401). */
+    fun invalidateAccessToken() { accessToken = null; expiresAt = 0 }
 
     private fun store(json: JSONObject) {
         accessToken = json.optString("access_token").takeIf { it.isNotBlank() }
@@ -109,6 +145,7 @@ class SpotifyAuth(
             val code = c.responseCode
             if (code !in 200..299) {
                 val detail = c.errorStream?.use { String(it.readNBytes(100_000), Charsets.UTF_8) }.orEmpty()
+                if (code == 400 && "invalid_grant" in detail) throw RevokedException()
                 error("Spotify 토큰 오류 $code ${detail.take(200)}")
             }
             JSONObject(c.inputStream.use { String(it.readNBytes(200_000), Charsets.UTF_8) })
