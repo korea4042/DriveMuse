@@ -216,7 +216,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                     repository.candidates(snapshot.context, config)
                 }
                 val p=profile();val constraints=Constraints(excludedGenres=p.exclusions)
-                val prepared=TasteRanker.prepare(tracks,p,constraints,learning.scores(sessionId,System.currentTimeMillis())).filter { effective.energyCeiling>=1 || it.energy?.let { e -> e<=effective.energyCeiling }==true }.sortedByDescending { it.affinity-it.fatigue }.take(40)
+                val prepared=TasteRanker.prepare(tracks,p,constraints,learning.scores(sessionId,System.currentTimeMillis())).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
                 if (prepared.isEmpty()) {
                     val report = runCatching { repository.refreshReport(config) }.getOrNull()
                     error("추천할 후보가 없어요 · " + (report?.describe() ?: "Spotify에서 곡을 가져오지 못했습니다"))

@@ -39,11 +39,11 @@ class CatalogV23Test {
         assertEquals(MetadataStatus.BASIC, MetadataPromotion.next(MetadataStatus.BASIC, true, true, 1))
         assertEquals(MetadataStatus.ENRICHED, MetadataPromotion.next(MetadataStatus.ENRICHED, true, true, 5))
     }
-    @Test fun validatedNeedsUsableRefAndCheckableExclusion() {
+    @Test fun validatedNeedsUsableRefButAllowsUnknownGenre() {
         val ok = ValidationGate.validate(ValidationInput(track, IdentityDecision.AUTO_ACCEPT, listOf(ref()), listOf(assertion("genre", "POP")), Constraints(excludedGenres = setOf("ROCK")), now))
         assertEquals(MetadataStatus.VALIDATED, ok.decision)
         val noGenre = ValidationGate.validate(ValidationInput(track, IdentityDecision.AUTO_ACCEPT, listOf(ref()), emptyList(), Constraints(excludedGenres = setOf("ROCK")), now))
-        assertTrue("GENRE_UNKNOWN_FOR_EXCLUSION" in noGenre.reasons)
+        assertEquals(MetadataStatus.VALIDATED, noGenre.decision)
         val expired = ValidationGate.validate(ValidationInput(track, IdentityDecision.AUTO_ACCEPT, listOf(ref().copy(expiresAt = now - 1)), listOf(assertion("genre", "POP")), Constraints(), now))
         assertTrue("NO_USABLE_PLAYABLE_REF" in expired.reasons)
     }

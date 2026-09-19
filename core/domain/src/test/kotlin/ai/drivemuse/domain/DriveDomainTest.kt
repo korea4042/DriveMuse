@@ -25,7 +25,7 @@ class DriveDomainTest {
     @Test fun disabledRuleIgnored() { assertEquals(.5,RuleEngine.resolve(listOf(MusicRule("x",null,"",.2,enabled=false)),DriveContext.TRAVEL,.5).discovery) }
     @Test fun parserRejectsUnknownAndOverRange() { assertNull(RuleEngine.parse("아티스트 다 삭제해", "x",0)); assertNull(RuleEngine.parse("새 노래 101%", "x",0)); assertEquals(.3,RuleEngine.parse("퇴근길 잔잔하게 새 노래 30%","x",0)?.discovery) }
     @Test fun rankerAvoidsConsecutiveArtistAndSkipped() { val rows=listOf(Track("a","a","A"),Track("b","b","A"),Track("c","c","B"),Track("d","d","C",skipped=true)); val chosen=Ranker.select(rows,EffectiveRules(.4,1.0)); assertFalse(chosen.any {it.skipped}); assertTrue(chosen.zipWithNext().all {(a,b)->a.artist!=b.artist}) }
-    @Test fun quietRuleExcludesUnknownEnergy() { val rows=listOf(Track("a","a","A"),Track("b","b","B",energy=.4)); assertEquals(listOf("b"),Ranker.select(rows,EffectiveRules(.3,.55)).map {it.id}) }
+    @Test fun quietRuleAllowsUnknownEnergy() { val rows=listOf(Track("a","a","A"),Track("b","b","B",energy=.4)); assertEquals(setOf("a", "b"),Ranker.select(rows,EffectiveRules(.3,.55)).map {it.id}.toSet()) }
     @Test fun urlIdentifierValidation() { assertTrue(Policy.validTrackId("abcdefghijk")); assertFalse(Policy.validTrackId("https://evil")) }
     @Test fun affinityOutranksFreshnessWithoutProviderSignal() {
         val liked=Track("a","a","A",affinity=.9,freshness=.4)

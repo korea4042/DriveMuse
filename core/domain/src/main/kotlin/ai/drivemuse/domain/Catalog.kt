@@ -141,7 +141,7 @@ data class ValidationResult(val decision: MetadataStatus, val reasons: List<Stri
 
 /**
  * §31 deterministic ValidationGate. An LLM never approves VALIDATED. Requires: accepted identity,
- * no unresolved version conflict, a currently usable ref, hard constraints checkable, and every
+ * no unresolved version conflict, a currently usable ref, no verified hard constraint conflicts, and every
  * required field backed by a live factual or community assertion (AI inference doesn't count).
  */
 object ValidationGate {
@@ -153,7 +153,6 @@ object ValidationGate {
         if (usable.any { it.versionType != VersionType.UNKNOWN && input.track.versionType != VersionType.UNKNOWN && it.versionType != input.track.versionType }) reasons += "VERSION_CONFLICT"
         val live = input.assertions.filter { it.trackId == input.track.trackId && it.live(input.now) && it.basis != Basis.AI_INFERRED }
         val genres = live.filter { it.field == "genre" }.map { it.value }.toSet()
-        if (input.constraints.excludedGenres.isNotEmpty() && genres.isEmpty()) reasons += "GENRE_UNKNOWN_FOR_EXCLUSION"
         if (genres.any { it in input.constraints.excludedGenres }) reasons += "EXCLUDED_GENRE"
         if (input.track.primaryArtist in input.constraints.excludedArtists) reasons += "EXCLUDED_ARTIST"
         input.requiredFields.filter { f -> live.none { it.field == f } }.forEach { reasons += "MISSING_$it" }

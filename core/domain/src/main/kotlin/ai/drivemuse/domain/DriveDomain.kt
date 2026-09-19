@@ -27,7 +27,10 @@ object ContextEngine {
     }
 }
 data class MusicRule(val id: String, val scope: DriveContext?, val text: String, val discovery: Double? = null, val energyCeiling: Double? = null, val enabled: Boolean = true, val priority: Int = 0, val createdAt: Long = 0)
-data class EffectiveRules(val discovery: Double, val energyCeiling: Double)
+data class EffectiveRules(val discovery: Double, val energyCeiling: Double) {
+    /** Unknown energy cannot establish a conflict with the requested mood. */
+    fun allowsEnergy(track: Track) = energyCeiling >= 1.0 || track.energy?.let { it <= energyCeiling } != false
+}
 object RuleEngine {
     fun resolve(rules: List<MusicRule>, context: DriveContext, defaultRatio: Double): EffectiveRules {
         val applicable = rules.filter { it.enabled && (it.scope == null || it.scope == context) }.sortedWith(compareByDescending<MusicRule> { it.priority }.thenByDescending { it.scope != null }.thenByDescending { it.createdAt })
@@ -52,7 +55,7 @@ object Ranker {
      * exposes no personalised ranking signal, so its weight moves onto locally derived affinity.
      */
     fun select(tracks: List<Track>, rules: EffectiveRules, count: Int = 3): List<Track> {
-        val pool = tracks.distinctBy { it.id }.filter { !it.skipped && (rules.energyCeiling >= 1.0 || (it.energy != null && it.energy <= rules.energyCeiling)) }.sortedByDescending { .40 * it.affinity + .25 * it.contextFit + .20 * (if (it.familiar) 0.0 else 1.0) + .15 * it.freshness - it.fatigue }.toMutableList()
+        val pool = tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.sortedByDescending { .40 * it.affinity + .25 * it.contextFit + .20 * (if (it.familiar) 0.0 else 1.0) + .15 * it.freshness - it.fatigue }.toMutableList()
         val selected = mutableListOf<Track>()
         while (pool.isNotEmpty() && selected.size < count) {
             val wantNew = selected.count { !it.familiar } < (selected.size + 1) * rules.discovery

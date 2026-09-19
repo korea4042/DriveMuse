@@ -53,7 +53,7 @@ object ExplorationMix {
 
     /** Fills a plan with candidates; falls back to any class rather than violating constraints or returning fewer than possible. */
     fun fill(plan: List<MixClass>, pool: List<Pair<Track, MixClass>>, avoidArtistRepeat: Boolean = true): List<Track> {
-        val remaining = pool.filter { it.second != MixClass.UNCLASSIFIED || plan.isEmpty() }.toMutableList(); val out = mutableListOf<Track>()
+        val remaining = pool.toMutableList(); val out = mutableListOf<Track>()
         for (want in plan) {
             val eligible = remaining.filter { !avoidArtistRepeat || it.first.artist != out.lastOrNull()?.artist }
             val pick = eligible.firstOrNull { it.second == want } ?: eligible.firstOrNull { it.second != MixClass.UNCLASSIFIED } ?: eligible.firstOrNull() ?: break

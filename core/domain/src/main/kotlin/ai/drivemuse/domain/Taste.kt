@@ -46,8 +46,12 @@ data class Constraints(val excludedIds: Set<String> = emptySet(), val excludedAr
     fun allows(t: Track): Boolean {
         if(t.id in excludedIds || t.artist in excludedArtists || t.skipped) return false
         val f=t.features.filter { it.valid }; val genres=f.filter { it.axis=="genre" }.map { it.value }
-        if(excludedGenres.isNotEmpty() && (genres.isEmpty() || genres.any { it in excludedGenres })) return false
-        return required.all { (axis,values) -> f.any { it.axis==axis && it.value in values } }
+        // Missing metadata is neutral: reject only a verified conflict.
+        if(genres.any { it in excludedGenres }) return false
+        return required.all { (axis,values) ->
+            val known = f.filter { it.axis == axis }
+            known.isEmpty() || known.any { it.value in values }
+        }
     }
 }
 object TasteRanker {
@@ -63,7 +67,7 @@ data class DiscoveryProgress(val total: Int = 0, val discoveries: Int = 0) {
 }
 object SessionRanker {
     fun select(tracks: List<Track>, rules: EffectiveRules, progress: DiscoveryProgress, count: Int = 3): List<Track> {
-        val pool=tracks.distinctBy { it.id }.filter { !it.skipped && (rules.energyCeiling>=1 || it.energy?.let { e -> e<=rules.energyCeiling }==true) }.sortedByDescending { .4*it.affinity+.25*it.contextFit+.15*it.freshness-it.fatigue }.toMutableList()
+        val pool=tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.sortedByDescending { .4*it.affinity+.25*it.contextFit+.15*it.freshness-it.fatigue }.toMutableList()
         val result=mutableListOf<Track>()
         while(result.size<count && pool.isNotEmpty()) {
             val wantNew=progress.discoveries+result.count { !it.familiar } < (progress.total+result.size+1)*rules.discovery
