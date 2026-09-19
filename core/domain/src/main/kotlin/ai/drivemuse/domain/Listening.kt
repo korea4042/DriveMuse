@@ -77,7 +77,7 @@ object PreferenceLearner {
 enum class PlaybackLevel { OPEN_ONLY, OBSERVE, CONTROL }
 data class QueueVersion(val sessionId: String, val generation: Long, val profileVersion: Long, val contextVersion: Long, val evidenceVersion: Long, val candidateSetId: String)
 object ProposalGate {
-    fun valid(expected: QueueVersion, actual: QueueVersion, ids: List<String>, candidates: List<Track>, constraints: Constraints): Boolean = expected==actual && ids.size in 1..3 && ids.distinct().size==ids.size && ids.all { id -> candidates.any { it.id==id && Policy.validTrackId(id) && constraints.allows(it) } }
+    fun valid(expected: QueueVersion, actual: QueueVersion, ids: List<String>, candidates: List<Track>, constraints: Constraints): Boolean = expected==actual && ids.size in 1..Policy.BATCH_SIZE && ids.distinct().size==ids.size && ids.all { id -> candidates.any { it.id==id && Policy.validTrackId(id) && constraints.allows(it) } }
 }
 enum class BatchStatus { PREPARING, PROVISIONAL, READY, ACTIVE, COMPLETED, SUSPENDED, INVALIDATED }
 data class Batch(val version: QueueVersion, val ids: List<String>, val status: BatchStatus, val completed: Set<String> = emptySet())
@@ -89,7 +89,7 @@ class BatchMachine {
     fun provisional(ids: List<String>) { next=next?.copy(ids=ids,status=BatchStatus.PROVISIONAL) }
     fun ready(version: QueueVersion, ids: List<String>): Boolean {
         val n=next?:return false
-        if(n.version!=version || n.status !in setOf(BatchStatus.PREPARING,BatchStatus.PROVISIONAL) || ids.size !in 1..3 || ids.distinct().size!=ids.size) return false
+        if(n.version!=version || n.status !in setOf(BatchStatus.PREPARING,BatchStatus.PROVISIONAL) || ids.size !in 1..Policy.BATCH_SIZE || ids.distinct().size!=ids.size) return false
         next=n.copy(ids=ids,status=BatchStatus.READY);return true
     }
     fun dispatch(level: PlaybackLevel, commandId: String, enabled: Boolean, suspended: Boolean): String? {

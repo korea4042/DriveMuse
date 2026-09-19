@@ -56,7 +56,7 @@ object Ranker {
      * Technical design v1.2 §6.9. The provider_relevance term is gone: the YouTube Data API
      * exposes no personalised ranking signal, so its weight moves onto locally derived affinity.
      */
-    fun select(tracks: List<Track>, rules: EffectiveRules, count: Int = 3): List<Track> {
+    fun select(tracks: List<Track>, rules: EffectiveRules, count: Int = Policy.BATCH_SIZE): List<Track> {
         val pool = tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.sortedByDescending { .40 * it.affinity + .25 * it.contextFit + .20 * (if (it.familiar) 0.0 else 1.0) + .15 * it.freshness - it.fatigue }.toMutableList()
         val selected = mutableListOf<Track>()
         while (pool.isNotEmpty() && selected.size < count) {
@@ -81,6 +81,12 @@ object Quota {
     fun remainingSearches(callsToday: Int) = (SEARCH_CALLS_PER_DAY - callsToday).coerceAtLeast(0)
 }
 object Policy {
+    /**
+     * Tracks planned per batch. Three was the design's planning unit; eight trades reaction speed
+     * for fewer interruptions — evidence from the first track now reaches selection eight tracks
+     * later instead of three, and the model is called roughly a third as often.
+     */
+    const val BATCH_SIZE = 8
     /** v1 requests youtube.readonly only. Write scopes are requested per feature, never at onboarding. */
     const val SCOPE_READONLY = "https://www.googleapis.com/auth/youtube.readonly"
     /** Provider track ids: a Spotify id is 22 base62 characters, an older YouTube id is 11. */

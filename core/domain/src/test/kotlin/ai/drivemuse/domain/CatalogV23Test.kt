@@ -109,7 +109,13 @@ class CatalogV23Test {
 
     // §29 mix allocation
     @Test fun allocationCorrectsSessionDrift() {
-        assertEquals(listOf(MixClass.KNOWN, MixClass.DISCOVERY, MixClass.KNOWN), ExplorationMix.allocate(MixTarget.DEFAULT, MixProgress()))
+        // Explicit count: this asserts how the mix is allocated, not how large a batch happens to be.
+        assertEquals(listOf(MixClass.KNOWN, MixClass.DISCOVERY, MixClass.KNOWN), ExplorationMix.allocate(MixTarget.DEFAULT, MixProgress(), 3))
+        // A full batch keeps the 50/40/10 target close over its own length (§29).
+        val full = ExplorationMix.allocate(MixTarget.DEFAULT, MixProgress(), Policy.BATCH_SIZE)
+        assertEquals(Policy.BATCH_SIZE, full.size)
+        assertEquals(4, full.count { it == MixClass.KNOWN })
+        assertEquals(3, full.count { it == MixClass.DISCOVERY })
         assertEquals(MixClass.DISCOVERY, ExplorationMix.allocate(MixTarget.DEFAULT, MixProgress(known = 6, discovery = 1), 1).single())
         assertEquals(MixClass.UNCLASSIFIED, ExplorationMix.classify(NoveltyState.UNKNOWN, true, 1.0))
     }

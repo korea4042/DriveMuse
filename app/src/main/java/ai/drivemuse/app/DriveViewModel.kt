@@ -266,7 +266,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // Appending must not repeat what is already queued or still playing. Only the batch now
             // playing is carried forward, so the list and the observer's plan stay at six.
             val excluded = if(append) snapshot.queue.map { it.id }.toSet() else emptySet()
-            val carried = if(append) snapshot.queue.takeLast(3) else emptyList()
+            val carried = if(append) snapshot.queue.takeLast(Policy.BATCH_SIZE) else emptyList()
             try {
                 val config = prefs.flow.first()
                 val ruleSnapshot = dao.rules().first().map { it.domain() }
@@ -304,7 +304,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val semantic=JSONObject().put("zone",validRegion?.zone?.name?:"UNKNOWN").put("timeOfDay",LocalDateTime.now().hour).put("origin","UNKNOWN").put("direction","UNKNOWN")
                 validWeather?.let { semantic.put("weather",JSONObject().put("temperature",it.temperature).put("precipitation",it.precipitation).put("stale",it.stale(now))) }
                 val novelty=if(snapshot.demo) emptyMap() else runCatching { ai.drivemuse.app.catalog.NoveltyAnnotator(db.catalog()).annotate(prepared,emptySet(),runtime.historyCoverageSince()) }.getOrDefault(emptyMap())
-                val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,listOf(0,1,2),novelty,MixTarget.resolve(p))
+                val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,(0 until Policy.BATCH_SIZE).toList(),novelty,MixTarget.resolve(p))
                 val queue=selection.tracks
                 if(generation!=selectionGeneration || survey.value?.revision!=revision) return
                 // Saying "adjust your rules" is wrong when the pool itself is empty, which is the

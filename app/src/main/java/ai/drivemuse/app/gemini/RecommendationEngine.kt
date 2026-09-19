@@ -23,7 +23,7 @@ class RecommendationEngine(private val gateway: RoleGateway) {
             require(JsonGate.integer(j,"surveyRevision")==d.revision && JsonGate.strings(j.getJSONArray("claimIds"),30).sorted()==expected && JsonGate.strings(j.getJSONArray("exclusions"),20).sorted()==p.exclusions.sorted() && JsonGate.number(j,"discovery")==p.discovery && JsonGate.strings(j.getJSONArray("unknowns"),7).sorted()==p.unknowns.sorted());JsonGate.string(j,"summary")
         }
     }
-    suspend fun select(enabled: Boolean, candidates: List<Track>, fallback: List<Track>, profile: SurveyProfile, semantic: JSONObject, review: List<Outcome>, constraints: Constraints, discovery: Double, progress: DiscoveryProgress, version: QueueVersion? = null, queueRevision: Long = 0, replaceableOrdinals: List<Int> = listOf(0,1,2), novelty: Map<String,CandidateNovelty> = emptyMap(), mix: MixTarget = MixTarget.DEFAULT): Selection {
+    suspend fun select(enabled: Boolean, candidates: List<Track>, fallback: List<Track>, profile: SurveyProfile, semantic: JSONObject, review: List<Outcome>, constraints: Constraints, discovery: Double, progress: DiscoveryProgress, version: QueueVersion? = null, queueRevision: Long = 0, replaceableOrdinals: List<Int> = (0 until Policy.BATCH_SIZE).toList(), novelty: Map<String,CandidateNovelty> = emptyMap(), mix: MixTarget = MixTarget.DEFAULT): Selection {
         if(!enabled || !gateway.configured) return Selection(fallback,"초기 취향 · 로컬 추천 · Spotify 재생")
         val result=withTimeoutOrNull(20000) {
             try {

@@ -37,7 +37,7 @@ object ExplorationMix {
      * Integer allocation for the next [count] slots, correcting for what the session already
      * exposed rather than forcing 50/40/10 in every batch of three.
      */
-    fun allocate(target: MixTarget, progress: MixProgress, count: Int = 3): List<MixClass> {
+    fun allocate(target: MixTarget, progress: MixProgress, count: Int = Policy.BATCH_SIZE): List<MixClass> {
         val result = mutableListOf<MixClass>(); var p = progress
         repeat(count) {
             val n = p.total + 1

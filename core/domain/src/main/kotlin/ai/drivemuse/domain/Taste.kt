@@ -68,7 +68,7 @@ data class DiscoveryProgress(val total: Int = 0, val discoveries: Int = 0) {
 object SessionRanker {
     /** A ranking nudge, not a rule: §30 forbids letting diversity shrink a batch. */
     const val REPEAT_ARTIST_PENALTY = .10
-    fun select(tracks: List<Track>, rules: EffectiveRules, progress: DiscoveryProgress, count: Int = 3): List<Track> {
+    fun select(tracks: List<Track>, rules: EffectiveRules, progress: DiscoveryProgress, count: Int = Policy.BATCH_SIZE): List<Track> {
         val pool=tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.toMutableList()
         val result=mutableListOf<Track>()
         while(result.size<count && pool.isNotEmpty()) {
