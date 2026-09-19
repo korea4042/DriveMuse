@@ -87,7 +87,8 @@ import java.time.format.DateTimeFormatter
         var showRegistration by rememberSaveable { mutableStateOf(false) }
         TextButton(onClick = { showRegistration = !showRegistration }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (showRegistration) "등록 정보 숨기기" else "연결이 안 되나요? 등록 정보 보기") }
         if (showRegistration) GlassSurface {
-            val identity = remember { ai.drivemuse.app.AndroidClientIdentity.of(LocalContext.current) }
+            val appContext = LocalContext.current
+            val identity = remember(appContext) { ai.drivemuse.app.AndroidClientIdentity.of(appContext) }
             Text("Spotify 대시보드에 아래 값이 그대로 있어야 합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             Metric("Redirect URI", ai.drivemuse.app.spotify.SpotifyAuth.REDIRECT)
             Metric("패키지명", identity?.packageName ?: "확인 불가")
