@@ -25,6 +25,34 @@ object ListeningAggregator {
     }
 }
 data class Outcome(val attemptId: String, val trackId: String, val sessionId: String, val version: Long, val totals: ListeningTotals, val endReason: EndReason, val confidence: Double, val explicit: Int? = null, val timestamp: Long)
+
+/** What ended one attempt, as the app saw it. A track change on its own says nothing about why. */
+enum class EndTrigger { TRACK_CHANGED, DISCONNECTED, SESSION_END }
+data class AttemptClose(val endedAt: Long, val lastPositionMs: Long, val durationMs: Long?, val trigger: EndTrigger, val appCommandAt: Long? = null)
+data class EndJudgement(val reason: EndReason, val confidence: Double)
+/**
+ * §7: the cause of a skip is not always observable. Only a track the player carried to its end, or
+ * one the app itself skipped, gets a confident reason. Anything else stays below the .8 bar §8 sets
+ * for scoring, so a steering-wheel button can never be read as dislike.
+ */
+object EndReasonResolver {
+    /** Position callbacks rarely land on the final millisecond; this far in counts as finished. */
+    const val COMPLETION = .97
+    /** How long after the app's own skip a track change is still attributed to it. */
+    const val COMMAND_WINDOW_MS = 10_000L
+    const val UNVERIFIED_CONFIDENCE = .6
+    fun resolve(close: AttemptClose): EndJudgement {
+        val commanded = close.appCommandAt?.let { close.endedAt - it in 0..COMMAND_WINDOW_MS } == true
+        val finished = close.durationMs?.takeIf { it > 0 }?.let { close.lastPositionMs >= it * COMPLETION } == true
+        return when {
+            close.trigger == EndTrigger.DISCONNECTED -> EndJudgement(EndReason.INTERRUPTED, 1.0)
+            close.trigger == EndTrigger.SESSION_END -> EndJudgement(EndReason.UNKNOWN, UNVERIFIED_CONFIDENCE)
+            finished -> EndJudgement(EndReason.NATURAL_END, 1.0)
+            commanded -> EndJudgement(EndReason.USER_NEXT, 1.0)
+            else -> EndJudgement(EndReason.USER_NEXT, UNVERIFIED_CONFIDENCE)
+        }
+    }
+}
 object PreferenceLearner {
     fun score(o: Outcome): Double {
         o.explicit?.let { require(it==1 || it == -1); return it.toDouble() }

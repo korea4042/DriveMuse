@@ -38,6 +38,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val engine=RecommendationEngine(gateway)
     private val coordinator=QueueCoordinator(db)
     private val learning=LearningStore(db)
+    // Phase 1 §4: the App Remote stream finally has a consumer, so listening becomes evidence.
+    private val observer=PlaybackObserver(db,learning,{ sessionId })
     private val location=LocationAdapter(application)
     private val weather=WeatherRepository()
     private var region: Region?=null
@@ -57,6 +59,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     val aiConfigured get()=gateway.configured
     val weatherConfigured get()=weather.configured
     val analysis=intelligence.observeState("survey_analysis").stateIn(viewModelScope,SharingStarted.Eagerly,null)
+    private val listeningMutable=MutableStateFlow(ListeningSummary())
+    /** Confirmed listening only. Collection counts never appear here (§20). */
+    val listening=listeningMutable.asStateFlow()
     // v2.3 §3, Spotify edition: the pool and playback come from one provider that identifies
     // recordings, so there is no video-to-song matching left to get wrong.
     private val repository = MusicRepository(runtime.spotify, dao, prefs)
@@ -75,8 +80,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         viewModelScope.launch {
             for(edit in edits) { surveyBusyMutable.value=true;try { edit() } catch(e: CancellationException) { throw e } catch(e: Exception) { message(explain(e)) } finally { surveyBusyMutable.value=false } }
         }
+        observer.start(viewModelScope,runtime.spotifyRemote.state)
         viewModelScope.launch {
             dao.prune(System.currentTimeMillis()-2592000000L);learning.prune(System.currentTimeMillis())
+            refreshListening()
             val d=surveyStore.load();draftMutable.value=d
             if(d.completed) { val restored=coordinator.restore(d.revision);mutable.update { it.copy(queue=restored,engineLabel="저장된 추천 · Spotify 재생") } }
         }
@@ -158,10 +165,24 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         viewModelScope.launch {
             val id="explicit:$sessionId:${track.id}"
             db.withTransaction { val version=(intelligence.outcome(id)?.version?:0)+1;intelligence.acceptOutcome(OutcomeEntity(id,track.id,sessionId,version,if(positive) 1.0 else -1.0,true,System.currentTimeMillis())) }
+            refreshListening()
             coordinator.invalidate();message("명시적 평가를 다음 추천에 반영합니다")
         }
     }
-    fun resetLearning() { if(ui.value.driving) return;cancelSelection();surveyJob?.cancel();engine.clearCache();viewModelScope.launch { db.withTransaction { intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearAnalysis() };progress=DiscoveryProgress();message("학습 기록을 초기화했습니다. 설문은 유지합니다") } }
+    private fun refreshListening() { viewModelScope.launch { listeningMutable.value=runCatching { learning.summary() }.getOrDefault(ListeningSummary()) } }
+    /**
+     * The one skip whose cause the app can prove (§7). The command is logged before it is sent, so
+     * the track change that follows is attributed to it rather than guessed at.
+     */
+    fun skipCurrent() {
+        if(ui.value.demo) { message("데모 곡은 재생할 수 없습니다"); return }
+        viewModelScope.launch {
+            observer.commandedSkip()
+            if(!runtime.spotifyRemote.next()) message("Spotify에 연결되지 않았어요")
+            kotlinx.coroutines.delay(2000);refreshListening()
+        }
+    }
+    fun resetLearning() { if(ui.value.driving) return;cancelSelection();surveyJob?.cancel();engine.clearCache();viewModelScope.launch { db.withTransaction { intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearAnalysis() };progress=DiscoveryProgress();refreshListening();message("학습 기록을 초기화했습니다. 설문은 유지합니다") } }
 
 
     fun page(page: String) {
@@ -300,6 +321,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
           // A hard ceiling on the whole request: nothing here may leave the button locked.
           val finished = kotlinx.coroutines.withTimeoutOrNull(60_000) {
             message("Spotify에 연결하는 중…")
+            // Registered before the command so the very first callback for this track is observed.
+            // Only what the app queued counts; Spotify's own autoplay never scores (§4).
+            observer.plan(null, listOf(track) + following)
             val remote = runtime.spotifyRemote
             var transport = "App Remote"
             var failure = remote.connect(getApplication())
@@ -321,6 +345,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val err = if (transport == "App Remote") remote.queueAwait(next.id) else runCatching { runtime.spotify.queue(next.id) }.exceptionOrNull()?.message
                 if (err == null) queued++
             }
+            refreshListening()
             message("${track.artist} ${track.title} 재생 시작" + (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기") + " ($transport)")
             true
           }
@@ -367,6 +392,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun resetAll() {
         if(ui.value.driving) return
         cancelSelection();accountJob?.cancel();surveyJob?.cancel();contextJob?.cancel();engine.clearCache()
-        edits.trySend { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearState();prefs.clear();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() }
+        edits.trySend { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearState();prefs.clear();observer.release();listeningMutable.value=ListeningSummary();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() }
     }
 }

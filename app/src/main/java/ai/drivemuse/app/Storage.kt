@@ -113,8 +113,9 @@ class Preferences(private val context: Context) {
 
 @Database(entities = [RuleEntity::class, HistoryEntity::class, CandidateEntity::class, PlayedEntity::class, IntelligenceState::class, BatchEntity::class, OutcomeEntity::class,
     TrackEntity::class, TrackIdentifierEntity::class, PlayableRefEntity::class, MetadataAssertionEntity::class, DiscoveryItemEntity::class, EnrichmentJobEntity::class, ValidationDecisionEntity::class,
-    IdentityAliasEntity::class, TrackExperienceEntity::class, UserTrackContextEntity::class, DiscoverySeedEntity::class, CollectionRunEntity::class, CollectionControlEntity::class, QuotaLedgerEntity::class, IntegrationConfigEntity::class],
-    version = 4, exportSchema = true)
+    IdentityAliasEntity::class, TrackExperienceEntity::class, UserTrackContextEntity::class, DiscoverySeedEntity::class, CollectionRunEntity::class, CollectionControlEntity::class, QuotaLedgerEntity::class, IntegrationConfigEntity::class,
+    PlaybackAttemptEntity::class, PlaybackEventEntity::class],
+    version = 5, exportSchema = true)
 abstract class DriveDatabase: RoomDatabase() {
     abstract fun dao(): DriveDao
     abstract fun intelligence(): IntelligenceDao
@@ -183,9 +184,30 @@ abstract class DriveDatabase: RoomDatabase() {
                 db.execSQL("INSERT OR IGNORE INTO `collection_control` (`scope`,`generation`,`leaseOwner`,`leaseUntil`,`lastSuccessAt`,`nextEligibleAt`,`autoEnabled`,`unmeteredOnly`) VALUES ('default', 1, NULL, 0, NULL, 0, 1, 1)")
             }
         }
+        /**
+         * Phase 1 §9: the observation path gets its own tables and the outcome row gains the totals
+         * it was always supposed to carry. Additive only — existing explicit ratings keep their
+         * score and read the new columns as neutral defaults.
+         */
+        private val MIGRATION_4_5 = object : Migration(4,5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `outcomes` ADD COLUMN `activeMs` INTEGER")
+                db.execSQL("ALTER TABLE `outcomes` ADD COLUMN `coveredMs` INTEGER")
+                db.execSQL("ALTER TABLE `outcomes` ADD COLUMN `ratio` REAL")
+                db.execSQL("ALTER TABLE `outcomes` ADD COLUMN `uncertain` INTEGER")
+                db.execSQL("ALTER TABLE `outcomes` ADD COLUMN `endReason` TEXT")
+                db.execSQL("ALTER TABLE `outcomes` ADD COLUMN `confidence` REAL")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `playback_attempt` (`attemptId` TEXT NOT NULL, `trackId` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `batchId` TEXT, `ordinal` INTEGER NOT NULL, `commandId` TEXT, `startedAt` INTEGER NOT NULL, `confirmedAt` INTEGER, `endedAt` INTEGER, `state` TEXT NOT NULL, PRIMARY KEY(`attemptId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_attempt_sessionId` ON `playback_attempt` (`sessionId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_attempt_startedAt` ON `playback_attempt` (`startedAt`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `playback_event` (`eventId` TEXT NOT NULL, `attemptId` TEXT NOT NULL, `observedAt` INTEGER NOT NULL, `positionMs` INTEGER NOT NULL, `durationMs` INTEGER NOT NULL, `paused` INTEGER NOT NULL, `source` TEXT NOT NULL, PRIMARY KEY(`eventId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_event_attemptId` ON `playback_event` (`attemptId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_playback_event_observedAt` ON `playback_event` (`observedAt`)")
+            }
+        }
         @Volatile private var instance: DriveDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
+            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build().also { instance = it }
         }
     }
 }

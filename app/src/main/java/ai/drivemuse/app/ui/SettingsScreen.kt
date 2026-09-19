@@ -176,7 +176,13 @@ import java.time.format.DateTimeFormatter
             Metric("이번 실행 추가 / 갱신", "${c.inserted} / ${c.updated}"); Metric("확인 대기", "${s.queuePending + s.queueRetry}건")
             Text("수집 건수는 학습이 아니에요. 청취 학습은 아래 별도로 표시합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
         }
-        GlassSurface { SectionTitle("청취 학습"); Metric("유효 청취 확인 곡", "${s.confirmedListened}곡"); Text("재생 상태를 확인할 수 있을 때만 늘어납니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) }
+        val listening by vm.listening.collectAsStateWithLifecycleCompat()
+        GlassSurface {
+            SectionTitle("청취 학습")
+            Metric("유효 청취", "${listening.validTracks}곡 · ${listening.sessions}개 세션")
+            Metric("관측된 재생", "${listening.observedAttempts}회")
+            Text("끝까지 듣거나 앱에서 건너뛴 곡만 점수가 됩니다. 원인을 확인할 수 없는 중단은 기록만 하고 학습하지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+        }
     }
 }
 

@@ -33,4 +33,13 @@ assert db.execute("SELECT generation FROM collection_control WHERE scope='defaul
 for t in ['track','track_identifier','playable_ref','metadata_assertion','discovery_item','enrichment_job','validation_decision','identity_alias','track_experience','user_track_context','discovery_seed','collection_run','collection_control','quota_ledger','integration_config']:
     assert db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(t,)).fetchone(), t
 db.execute("INSERT INTO track_identifier VALUES ('t1','ISRC','KR1',\"MB\",0)"); db.execute("INSERT INTO track_identifier VALUES ('t2','ISRC','KR1','MB',0)")  # ISRC not globally unique (§27)
-print('PASS: additive migrations v1→v4 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only')
+# Phase 1 §9: observation tables exist and an explicit rating written before v5 survives with neutral defaults.
+db.execute("INSERT INTO outcomes (attemptId,trackId,sessionId,version,score,explicit,createdAt) VALUES ('legacy','t','s',1,1.0,1,10)")
+kept=db.execute("SELECT score, explicit, activeMs, coveredMs, ratio, uncertain, endReason, confidence FROM outcomes WHERE attemptId='legacy'").fetchone()
+assert kept==(1.0,1,None,None,None,None,None,None), kept
+for t in ['playback_attempt','playback_event']:
+    assert db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(t,)).fetchone(), t
+db.execute("INSERT INTO playback_attempt VALUES ('a1','t','s',NULL,0,NULL,0,NULL,NULL,'COMMANDED')")
+db.execute("INSERT INTO playback_event VALUES ('e1','a1',0,0,210000,0,'APP_REMOTE')")
+assert db.execute("SELECT count(*) FROM playback_event WHERE attemptId='a1'").fetchone()==(1,)
+print('PASS: additive migrations v1→v5 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables')

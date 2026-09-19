@@ -121,7 +121,7 @@ class MainActivity: ComponentActivity() {
                         DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else "Spotify에서 재생",!ui.busy) {
                             if(ui.queue.isEmpty()) vm.recommend() else if(ui.demo) vm.message("샘플 곡입니다. 설정에서 데모 모드를 끄고 Google 계정을 연결해 주세요") else vm.handoff(ui.queue.first())
                         }
-                        if(ui.queue.isNotEmpty()) TextButton(onClick={ vm.recommend() },modifier=Modifier.fillMaxWidth()) { Text("다른 믹스 고르기") }
+                        if(ui.queue.isNotEmpty()) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { TextButton(onClick={ vm.recommend() }) { Text("다른 믹스 고르기") }; if(!ui.demo) TextButton(onClick={ vm.skipCurrent() }) { Text("다음 곡으로") } }
                         Text("재생과 차량 디스플레이는 Spotify가 담당해요.",fontSize=11.sp,color=DriveColors.Muted)
                     } }
                     item { GlassSurface { Row(verticalAlignment=Alignment.CenterVertically) { AgentOrb(active=settings.suspendedUntil<System.currentTimeMillis()); Column(Modifier.weight(1f).padding(start=14.dp)) { Text(if(settings.suspendedUntil>System.currentTimeMillis()) "사용자 선택 유지 중" else "당신의 뮤직 에이전트",fontWeight=FontWeight.SemiBold); Text(ui.engineLabel,color=DriveColors.Muted,fontSize=12.sp) }; IconButton(onClick={ vm.page("에이전트") }) { Icon(Icons.Outlined.ChevronRight,"에이전트 설정") } }; Text(ui.connection,fontSize=12.sp,color=DriveColors.Cyan) } }
