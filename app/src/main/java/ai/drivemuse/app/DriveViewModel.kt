@@ -297,6 +297,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         val batch = ui.value.queue
         val following = batch.dropWhile { it.id != track.id }.drop(1).filter { it.id != track.id }.distinctBy { it.id }
         playbackJob = viewModelScope.launch {
+          // A hard ceiling on the whole request: nothing here may leave the button locked.
+          val finished = kotlinx.coroutines.withTimeoutOrNull(60_000) {
             message("Spotify에 연결하는 중…")
             val remote = runtime.spotifyRemote
             var transport = "App Remote"
@@ -309,7 +311,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val confirmed = web.isSuccess && confirmViaWebApi(track.id)
                 if (!confirmed) {
                     message(failure + (web.exceptionOrNull()?.let { " · Web API: ${it.message}" } ?: " · Web API: 시작 확인 실패"))
-                    return@launch
+                    return@withTimeoutOrNull false
                 }
             }
             // Exposure only (§17 EXPOSED_ONLY); the listening outcome comes from observation.
@@ -320,6 +322,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 if (err == null) queued++
             }
             message("${track.artist} ${track.title} 재생 시작" + (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기") + " ($transport)")
+            true
+          }
+          if (finished == null) message("재생 요청이 60초 안에 끝나지 않아 중단했어요. Spotify 앱 상태를 확인해 주세요")
         }
     }
 

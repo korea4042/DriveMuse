@@ -54,12 +54,16 @@ class SpotifyRemote(private val clientId: () -> String?) {
             .setRedirectUri(SpotifyAuth.REDIRECT)
             .showAuthView(true)
             .build()
-        val result = suspendCancellableCoroutine<Pair<SpotifyAppRemote?, String?>> { cont ->
-            SpotifyAppRemote.connect(context.applicationContext, params, object : Connector.ConnectionListener {
-                override fun onConnected(appRemote: SpotifyAppRemote) { if (cont.isActive) cont.resume(appRemote to null) }
-                override fun onFailure(error: Throwable) { if (cont.isActive) cont.resume(null to explain(error)) }
-            })
-        }
+        // The SDK may never call back (Spotify app stuck, auth dialog never shown). A bound is the
+        // difference between a clear failure and a request that spins forever.
+        val result = withTimeoutOrNull(20_000) {
+            suspendCancellableCoroutine<Pair<SpotifyAppRemote?, String?>> { cont ->
+                SpotifyAppRemote.connect(context.applicationContext, params, object : Connector.ConnectionListener {
+                    override fun onConnected(appRemote: SpotifyAppRemote) { if (cont.isActive) cont.resume(appRemote to null) }
+                    override fun onFailure(error: Throwable) { if (cont.isActive) cont.resume(null to explain(error)) }
+                })
+            }
+        } ?: return "Spotify 앱이 20초 안에 응답하지 않았어요. Spotify를 한 번 열어 로그인 상태를 확인한 뒤 다시 시도해 주세요"
         val connectedRemote = result.first ?: return result.second
         remote = connectedRemote
         connectedRemote.playerApi.subscribeToPlayerState().setEventCallback { s ->
