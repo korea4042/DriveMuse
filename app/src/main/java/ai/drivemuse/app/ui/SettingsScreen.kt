@@ -156,7 +156,7 @@ import java.time.format.DateTimeFormatter
 }
 
 /** Detail: collection (§20 status, §24 rows). Counters from different sources are shown separately. */
-@Composable fun CollectionDetail(cvm: CatalogViewModel, driving: Boolean) {
+@Composable fun CollectionDetail(vm: DriveViewModel, cvm: CatalogViewModel, driving: Boolean) {
     val c by cvm.collection.collectAsStateWithLifecycleCompat(); val s by cvm.summary.collectAsStateWithLifecycleCompat()
     LaunchedEffect(c) { cvm.refreshSummary() }
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
