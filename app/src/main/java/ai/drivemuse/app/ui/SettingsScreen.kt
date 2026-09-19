@@ -177,23 +177,33 @@ import java.time.format.DateTimeFormatter
 /** Detail: collection (§20 status, §24 rows). Counters from different sources are shown separately. */
 @Composable fun CollectionDetail(vm: DriveViewModel, cvm: CatalogViewModel, driving: Boolean) {
     val c by cvm.collection.collectAsStateWithLifecycleCompat(); val s by cvm.summary.collectAsStateWithLifecycleCompat()
-    LaunchedEffect(c) { cvm.refreshSummary() }
+    val busy by cvm.busy.collectAsStateWithLifecycleCompat()
+    LaunchedEffect(c, busy) { cvm.refreshSummary() }
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("음악 정보 수집", "재생 없이 후보를 모아 둡니다")
+        val pool by vm.poolStatus.collectAsStateWithLifecycleCompat()
         GlassSurface {
-            Text(c.phase, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
-            Text(c.lastSuccessAt?.let { "마지막 성공 ${time(it)}" } ?: "아직 성공한 수집이 없어요", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            // The phase came from the retired Catalog pipeline and read "연결 확인 필요" forever.
+            // What matters is whether the pool selection reads has enough in it.
+            Text(if (s.playable > 0) "후보 ${s.playable}곡 보유" else "후보를 아직 못 모았어요", fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            Text(c.lastSuccessAt?.let { "마지막 갱신 ${time(it)}" } ?: "아직 갱신한 적이 없어요", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             if (!driving) {
                 ToggleRow("자동 수집", "약 6시간마다, 배터리·저장 공간이 충분할 때", c.autoEnabled, cvm::setAutoCollect)
                 ToggleRow("Wi-Fi에서만", "모바일 데이터에서는 수집하지 않아요", c.unmeteredOnly, cvm::setUnmeteredOnly)
-                DriveButton("지금 후보 보충", c.phase != "수집 중") { cvm.topUpNow() }
+                DriveButton("지금 후보 보충", busy == null) { cvm.topUpNow() }
             } else Text("정차 후 설정에서 바꿀 수 있어요.", fontSize = 14.sp, color = DriveColors.Muted)
         }
         GlassSurface {
             SectionTitle("보유 후보")
-            Metric("검증된 곡", "${s.validated}곡"); Metric("지금 재생 가능", "${s.playable}곡"); Metric("청취 기록 없는 후보", "${s.noHistory}곡")
-            Metric("이번 실행 추가 / 갱신", "${c.inserted} / ${c.updated}"); Metric("확인 대기", "${s.queuePending + s.queueRetry}건")
+            Metric("재생 가능한 후보", "${s.playable}곡")
+            Metric("장르 확인된 곡", "${s.genreTagged}곡")
+            Metric("청취 기록 없는 후보", "${s.noHistory}곡")
+            Text(pool, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             Text("수집 건수는 학습이 아니에요. 청취 학습은 아래 별도로 표시합니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            if (s.stalled > 0) Expander("예전 수집 기록") {
+                Text("예전 YouTube 수집 경로가 남긴 대기 항목 ${s.stalled}건이에요. 지금은 처리되지 않으며 선곡에도 쓰이지 않습니다.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+                if (!driving) TextButton(onClick = { cvm.clearStalledQueue() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("정리하기") }
+            }
         }
         val listening by vm.listening.collectAsStateWithLifecycleCompat()
         GlassSurface {

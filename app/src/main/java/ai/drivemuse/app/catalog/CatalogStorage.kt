@@ -141,6 +141,8 @@ data class PoolCounts(val validated: Int, val eligible: Int, val noHistory: Int)
     @Update abstract suspend fun updateDiscoveryItem(row: DiscoveryItemEntity)
     @Query("SELECT * FROM discovery_item WHERE scope = :scope AND queueStatus IN ('PENDING','RETRY_WAIT') AND retryAt <= :now AND generation = :generation ORDER BY discoveredAt LIMIT :limit") abstract suspend fun dueItems(scope: String, generation: Long, now: Long, limit: Int): List<DiscoveryItemEntity>
     @Query("SELECT queueStatus, COUNT(*) AS n FROM discovery_item WHERE scope = :scope GROUP BY queueStatus") abstract suspend fun queueCounts(scope: String): List<StatusCount>
+    /** §8: the retired YouTube path can no longer drain its queue, so it is cleared on request. */
+    @Query("DELETE FROM discovery_item WHERE scope = :scope AND queueStatus IN ('PENDING','RETRY_WAIT')") abstract suspend fun clearDiscoveryQueue(scope: String)
     @Query("DELETE FROM discovery_item WHERE scope = :scope") abstract suspend fun clearDiscovery(scope: String)
     @Insert(onConflict = OnConflictStrategy.REPLACE) abstract suspend fun putDecision(row: ValidationDecisionEntity)
     @Query("SELECT * FROM validation_decision WHERE trackId = :trackId ORDER BY decidedAt DESC LIMIT 1") abstract suspend fun latestDecision(trackId: String): ValidationDecisionEntity?

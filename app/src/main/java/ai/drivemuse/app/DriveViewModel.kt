@@ -83,7 +83,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     val listening=listeningMutable.asStateFlow()
     // v2.3 §3, Spotify edition: the pool and playback come from one provider that identifies
     // recordings, so there is no video-to-song matching left to get wrong.
-    private val repository = MusicRepository(runtime.spotify, dao, prefs)
+    private val repository = runtime.music
     val settings = prefs.flow.stateIn(viewModelScope,SharingStarted.Eagerly,Settings())
     val rules = dao.rules().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
     val history = dao.history().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())

@@ -17,7 +17,13 @@ import kotlinx.coroutines.launch
  */
 
 data class CollectionStatus(val phase: String, val lastSuccessAt: Long?, val inserted: Int, val updated: Int, val autoEnabled: Boolean, val unmeteredOnly: Boolean, val nextEligibleAt: Long)
-data class CatalogSummary(val validated: Int, val playable: Int, val noHistory: Int, val confirmedListened: Int, val queuePending: Int, val queueRetry: Int)
+/**
+ * The pool that actually feeds selection. This screen used to report the Catalog pipeline — track,
+ * playable_ref, discovery_item — which the Spotify switch left unfed, so it showed zeros and a
+ * permanent "연결 확인 필요" while selection worked fine from a different table. Reporting a dead
+ * subsystem as broken, and staying silent about the live one, is worse than reporting nothing.
+ */
+data class CatalogSummary(val pool: Int, val playable: Int, val noHistory: Int, val confirmedListened: Int, val genreTagged: Int, val stalled: Int)
 
 class CatalogViewModel(application: Application) : AndroidViewModel(application) {
     private val runtime = IntegrationRuntime.get(application)
@@ -47,13 +53,29 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
     private val summaryMutable = MutableStateFlow(CatalogSummary(0, 0, 0, 0, 0, 0))
     val summary = summaryMutable.asStateFlow()
     fun refreshSummary() { viewModelScope.launch {
-        val now = System.currentTimeMillis(); val validated = catalog.validatedTracks()
-        val ids = validated.map { it.trackId }
-        val refs = if (ids.isEmpty()) emptyList() else catalog.refsFor(ids, now).filter { it.domain().usable(now) }.map { it.trackId }.toSet()
-        val exp = if (ids.isEmpty()) emptyMap() else catalog.experiences("default", ids).associateBy { it.trackId }
-        val noHistory = ids.count { id -> NoveltyResolver.resolve(exp[id]?.domain() ?: TrackExperience(id, historyCoverageSince = runtime.historyCoverageSince()), false, false).state == NoveltyState.NO_OBSERVED_HISTORY }
-        val counts = catalog.queueCounts("default").associate { it.queueStatus to it.n }
-        summaryMutable.value = CatalogSummary(validated.size, refs.size, noHistory, catalog.confirmedListenedCount("default"), counts["PENDING"] ?: 0, counts["RETRY_WAIT"] ?: 0)
+        val dao = runtime.db.dao()
+        val rows = runCatching { dao.candidates(0) }.getOrDefault(emptyList())
+        // Playable means Spotify can actually start it: legacy YouTube ids cannot.
+        val playable = rows.count { ai.drivemuse.app.spotify.SpotifyIds.isTrackId(it.videoId) }
+        val heard = runCatching { runtime.db.intelligence().outcomes().filter { !it.explicit }.map { it.trackId }.toSet() }.getOrDefault(emptySet())
+        val counts = runCatching { catalog.queueCounts("default").associate { it.queueStatus to it.n } }.getOrDefault(emptyMap())
+        summaryMutable.value = CatalogSummary(
+            pool = rows.size,
+            playable = playable,
+            noHistory = rows.count { ai.drivemuse.app.spotify.SpotifyIds.isTrackId(it.videoId) && it.videoId !in heard },
+            confirmedListened = heard.size,
+            genreTagged = rows.count { it.topics.isNotBlank() },
+            // Left over from the retired collection path; shown only so it is not a silent mystery.
+            stalled = (counts["PENDING"] ?: 0) + (counts["RETRY_WAIT"] ?: 0)
+        )
+    } }
+
+    /** Removes the discovery queue the retired YouTube path left behind (§8). */
+    fun clearStalledQueue() { viewModelScope.launch {
+        runCatching { catalog.clearDiscoveryQueue("default") }
+            .onSuccess { messageMutable.value = "예전 수집 대기 항목을 정리했습니다" }
+            .onFailure { messageMutable.value = "정리하지 못했습니다 · ${it.message ?: ""}" }
+        refreshSummary()
     } }
 
     fun saveIntegration(p: ProviderId, values: Map<String, String>) {
@@ -87,7 +109,16 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
 
     fun setAutoCollect(enabled: Boolean) { viewModelScope.launch { catalog.putControl((catalog.control("default") ?: CollectionControlEntity("default", 1, null, 0, null, 0, true, true)).copy(autoEnabled = enabled)); MetadataSyncWorker.schedule(getApplication(), collection.value.unmeteredOnly, enabled) } }
     fun setUnmeteredOnly(only: Boolean) { viewModelScope.launch { catalog.putControl((catalog.control("default") ?: CollectionControlEntity("default", 1, null, 0, null, 0, true, true)).copy(unmeteredOnly = only)); MetadataSyncWorker.schedule(getApplication(), only, collection.value.autoEnabled) } }
-    fun topUpNow() { MetadataSyncWorker.topUp(getApplication(), "MANUAL"); messageMutable.value = "후보 보충을 요청했습니다. 네트워크 조건에 따라 잠시 걸릴 수 있어요" }
+    /** Refreshes the Spotify pool directly: the old worker fed the retired Catalog path (§8). */
+    fun topUpNow() { viewModelScope.launch {
+        if (busyMutable.value != null) return@launch
+        busyMutable.value = ProviderId.SPOTIFY
+        messageMutable.value = try {
+            runtime.music.refreshReport(runtime.prefs.flow.first()).describe()
+        } catch (e: Exception) { "후보 보충 실패 · ${e.message ?: e::class.simpleName}" }
+        busyMutable.value = null
+        refreshSummary()
+    } }
     fun message(text: String?) { messageMutable.value = text }
 
     /** Spotify sign-in and sign-out; the redirect comes back through MainActivity. */

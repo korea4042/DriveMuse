@@ -59,6 +59,8 @@ class IntegrationRuntime private constructor(context: Context) {
     /** App Remote: starts the Spotify app itself, so nothing has to be open beforehand. */
     val spotifyRemote = SpotifyRemote { runBlocking { integrations.active(ProviderId.SPOTIFY).clientId } }
     val coordinator = DiscoveryCoordinator(db, youtube, registry)
+    /** The pool selection actually reads. Shared so one refresh serves screen, worker and drive. */
+    val music by lazy { MusicRepository(spotify, db.dao(), prefs) }
     val surveyStore = SurveyStore(db)
     val prefs = Preferences(context)
 
@@ -82,6 +84,6 @@ class IntegrationRuntime private constructor(context: Context) {
 
     companion object {
         @Volatile private var instance: IntegrationRuntime? = null
-        fun get(context: Context): IntegrationRuntime = instance ?: synchronized(this) { instance ?: IntegrationRuntime(context.applicationContext).also { rt -> instance = rt; DiscoveryRuntime.factory = { DiscoveryRuntime(rt.coordinator) { rt.snapshot() } } } }
+        fun get(context: Context): IntegrationRuntime = instance ?: synchronized(this) { instance ?: IntegrationRuntime(context.applicationContext).also { rt -> instance = rt; DiscoveryRuntime.factory = { DiscoveryRuntime(rt.coordinator, { rt.snapshot() }, { runCatching { rt.music.refreshReport(rt.prefs.flow.first()); Unit } }) } } }
     }
 }

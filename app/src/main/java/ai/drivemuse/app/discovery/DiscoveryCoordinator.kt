@@ -215,8 +215,9 @@ class MetadataSyncWorker(context: Context, params: WorkerParameters) : Coroutine
         val factory = DiscoveryRuntime.factory ?: return Result.success()  // app decides wiring; worker never builds credentials itself
         val runtime = factory(app)
         val snapshot = runtime.snapshot() ?: return Result.success()        // survey not completed, or automation disabled
-        val report = runtime.coordinator.run(snapshot, inputData.getString("reason") ?: "PERIODIC") ?: return Result.success()
-        return when (report.status) { "NEEDS_AUTH", "QUOTA", "STALE", "SUCCESS", "PARTIAL" -> Result.success(); "RATE_LIMITED" -> Result.retry(); else -> if (runAttemptCount < 3) Result.retry() else Result.success() }
+        // §8: the Catalog path this worker used to drive is retired, and its queue can no longer be
+        // drained. Topping up the Spotify pool is the work that still matters to selection.
+        return runtime.topUpPool().fold({ Result.success() }, { if (runAttemptCount < 3) Result.retry() else Result.success() })
     }
     companion object {
         const val PERIODIC = "drivemuse.metadata-sync"
@@ -233,6 +234,6 @@ class MetadataSyncWorker(context: Context, params: WorkerParameters) : Coroutine
 }
 
 /** Wiring hook so the worker uses the same encrypted config and DB as the app. */
-class DiscoveryRuntime(val coordinator: DiscoveryCoordinator, val snapshot: suspend () -> RunSnapshot?) {
+class DiscoveryRuntime(val coordinator: DiscoveryCoordinator, val snapshot: suspend () -> RunSnapshot?, val topUpPool: suspend () -> kotlin.Result<Unit> = { kotlin.Result.success(Unit) }) {
     companion object { @Volatile var factory: ((Context) -> DiscoveryRuntime)? = null }
 }
