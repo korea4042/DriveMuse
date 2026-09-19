@@ -108,12 +108,21 @@ class SpotifyApi(private val auth: SpotifyAuth) {
 
     suspend fun me(): JSONObject? = request("GET", "me")
 
+    /**
+     * Without a market, Spotify returns recordings that cannot be played in the listener's country,
+     * and the pool fills with tracks that fail at playback rather than at selection. The account's
+     * own country is the right answer; it is read once and cached.
+     */
+    @Volatile private var cachedMarket: String? = null
+    private suspend fun market(): String = cachedMarket ?: (runCatching { me()?.optString("country") }.getOrNull()
+        ?.takeIf { it.length == 2 } ?: "KR").also { cachedMarket = it }
+
     suspend fun search(query: String, limit: Int = 20): List<SpotifyTrack> =
-        request("GET", "search", mapOf("q" to query.take(200), "type" to "track", "limit" to limit.coerceIn(1, 50).toString()))
+        request("GET", "search", mapOf("q" to query.take(200), "type" to "track", "market" to market(), "limit" to limit.coerceIn(1, 50).toString()))
             ?.optJSONObject("tracks")?.optJSONArray("items").toTracks()
 
     suspend fun savedTracks(limit: Int = 50): List<SpotifyTrack> =
-        request("GET", "me/tracks", mapOf("limit" to limit.coerceIn(1, 50).toString()))
+        request("GET", "me/tracks", mapOf("market" to market(), "limit" to limit.coerceIn(1, 50).toString()))
             ?.optJSONArray("items")?.let { items ->
                 (0 until items.length()).mapNotNull { items.optJSONObject(it)?.optJSONObject("track")?.let(::track) }
             }.orEmpty()
@@ -153,14 +162,14 @@ class SpotifyApi(private val auth: SpotifyAuth) {
             ?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("id")?.takeIf { id -> id.isNotBlank() } } }
             .orEmpty()
         return ids.take(albums).flatMap { albumId ->
-            request("GET", "albums/$albumId/tracks", mapOf("limit" to "5"))?.optJSONArray("items")
+            request("GET", "albums/$albumId/tracks", mapOf("market" to market(), "limit" to "5"))?.optJSONArray("items")
                 ?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("id")?.takeIf { id -> id.isNotBlank() } } }
                 .orEmpty()
         }.let { if (it.isEmpty()) emptyList() else tracks(it) }
     }
 
     suspend fun tracks(ids: List<String>): List<SpotifyTrack> = ids.distinct().chunked(50).flatMap { chunk ->
-        request("GET", "tracks", mapOf("ids" to chunk.joinToString(",")))?.optJSONArray("tracks").toTracks()
+        request("GET", "tracks", mapOf("ids" to chunk.joinToString(","), "market" to market()))?.optJSONArray("tracks").toTracks()
     }
 
     // ---- playback --------------------------------------------------------------------------

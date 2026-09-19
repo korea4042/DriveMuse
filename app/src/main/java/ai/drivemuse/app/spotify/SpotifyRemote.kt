@@ -83,7 +83,9 @@ class SpotifyRemote(private val clientId: () -> String?) {
         val hint = when {
             "CouldNotFindSpotifyApp" in kind -> "기기에 Spotify 앱이 없어요"
             "NotLoggedIn" in kind -> "Spotify 앱에 로그인해 주세요"
-            "UserNotAuthorized" in kind || "AuthenticationFailed" in kind -> "Spotify 대시보드에 이 앱의 패키지명·SHA-1·Redirect URI가 등록돼 있는지 확인해 주세요"
+            // Three different causes share this exception, so name all three rather than guess.
+            "UserNotAuthorized" in kind || "AuthenticationFailed" in kind ->
+                "재생 권한이 없어요. ①설정에서 연결을 해제하고 다시 연결(app-remote-control 권한) ②Spotify 대시보드에 패키지명·SHA-1·Redirect URI 등록 ③개발자 대시보드 User Management에 이 계정 추가, 순서로 확인해 주세요"
             "Offline" in kind -> "Spotify가 오프라인 상태예요"
             "UnsupportedFeatureVersion" in kind -> "Spotify 앱을 최신 버전으로 업데이트해 주세요"
             "SpotifyDisconnected" in kind || "SpotifyConnectionTerminated" in kind -> "Spotify 연결이 끊겼어요. 다시 시도해 주세요"

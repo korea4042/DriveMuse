@@ -34,12 +34,22 @@ class SpotifyAuth(
 ) {
     companion object {
         const val REDIRECT = "drivemuse://spotify-callback"
-        /** Read profile and library, read playback state, and control playback (Premium only). */
+        /**
+         * Read profile and library, read playback state, and control playback (Premium only).
+         *
+         * app-remote-control is what the Android App Remote SDK connects with. Without it the SDK
+         * fails at connect even though every Web API call still works, which is exactly the shape
+         * of "the API is fine but playback never starts". streaming is requested alongside it
+         * because Spotify treats the pair as the playback grant.
+         */
         val SCOPES = listOf(
             "user-read-email", "user-read-private",
             "user-library-read", "user-top-read", "user-follow-read", "user-read-recently-played",
-            "user-read-playback-state", "user-modify-playback-state"
+            "user-read-playback-state", "user-modify-playback-state",
+            "app-remote-control", "streaming"
         )
+        /** Granted scopes are per authorization: an existing link does not gain a new scope. */
+        val PLAYBACK_SCOPES = setOf("app-remote-control", "streaming")
     }
 
     private val mutex = Mutex()
@@ -58,6 +68,14 @@ class SpotifyAuth(
         set(value) { pending.edit().apply { if (value == null) remove("state") else putString("state", value) }.apply() }
 
     val linked get() = !readRefresh().isNullOrBlank()
+
+    /**
+     * What Spotify actually granted, as the token endpoint reports it. A link made before a scope
+     * was added keeps the old set until the user authorizes again, so this is the difference
+     * between "not connected" and "connected without permission to control playback".
+     */
+    @Volatile var grantedScopes: Set<String> = emptySet(); private set
+    val missingPlaybackScopes get() = if (grantedScopes.isEmpty()) emptySet() else PLAYBACK_SCOPES - grantedScopes
 
     /** Builds the consent URL and hands it to the browser; the redirect comes back to MainActivity. */
     fun authorizeIntent(): Intent? {
@@ -120,7 +138,7 @@ class SpotifyAuth(
         accessToken ?: throw SpotifyAuthRequired()
     }
 
-    fun signOut() { accessToken = null; expiresAt = 0; writeRefresh(null); verifier = null }
+    fun signOut() { accessToken = null; expiresAt = 0; writeRefresh(null); verifier = null; grantedScopes = emptySet() }
 
     /** Drops the cached access token so the next call refreshes (used after a 401). */
     fun invalidateAccessToken() { accessToken = null; expiresAt = 0 }
@@ -128,6 +146,7 @@ class SpotifyAuth(
     private fun store(json: JSONObject) {
         accessToken = json.optString("access_token").takeIf { it.isNotBlank() }
         expiresAt = System.currentTimeMillis() + json.optLong("expires_in", 3600) * 1000
+        json.optString("scope").takeIf { it.isNotBlank() }?.let { grantedScopes = it.split(" ").filter(String::isNotBlank).toSet() }
         // A rotated refresh token replaces the old one; an omitted one means keep what we have.
         json.optString("refresh_token").takeIf { it.isNotBlank() }?.let { writeRefresh(it) }
     }

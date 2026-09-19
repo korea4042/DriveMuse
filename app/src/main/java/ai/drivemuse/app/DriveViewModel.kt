@@ -144,13 +144,25 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun refreshPool() {
         viewModelScope.launch {
             // Name what each Spotify source returned; "pool empty" alone never says which step failed.
+            // Name every precondition separately. "Spotify가 안 돼요" is usually one of four
+            // different things, and a single pass/fail hides which.
             val probe = runCatching {
                 val me = runtime.spotify.me()
                 val product = me?.optString("product").orEmpty()
+                val country = me?.optString("country").orEmpty()
                 val saved = runCatching { runtime.spotify.savedTracks(5).size }.getOrElse { -1 }
                 val top = runCatching { runtime.spotify.topTracks(limit = 5).size }.getOrElse { -1 }
                 val search = runCatching { runtime.spotify.search("pop", 5).size }.getOrElse { -1 }
-                "계정 " + (product.ifBlank { "확인 불가" }) + " · 저장 $saved · 인기 $top · 검색 $search"
+                val missing = runtime.spotifyAuth.missingPlaybackScopes
+                val scopeNote = when {
+                    runtime.spotifyAuth.grantedScopes.isEmpty() -> ""
+                    missing.isEmpty() -> " · 재생 권한 있음"
+                    // The stored authorization predates the scope; only re-linking can add it.
+                    else -> " · 재생 권한 없음(${missing.joinToString(",")}) · 연결을 해제하고 다시 연결해 주세요"
+                }
+                "계정 " + (product.ifBlank { "확인 불가" }) + (if (country.isBlank()) "" else " · $country") +
+                    " · 저장 $saved · 인기 $top · 검색 $search" + scopeNote +
+                    (if (product == "premium") "" else " · 곡 지정 재생에는 Premium이 필요해요")
             }.getOrElse { "Spotify 조회 실패: " + (it.message ?: it::class.simpleName) }
             val before = dao.candidateCount(0)
             val outcome = runCatching { repository.refreshReport(settings.value) }
