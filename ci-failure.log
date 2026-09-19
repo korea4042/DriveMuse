@@ -1,12 +1,5 @@
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:179:23 Property delegate must have a 'getValue(Nothing?, KProperty0<ERROR CLASS: Cannot infer argument for type parameter T>)' method. None of the following functions is applicable:
-fun <T> State<T>.getValue(thisObj: Any?, property: KProperty<*>): T
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:179:26 Unresolved reference 'vm'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:179:26 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:179:39 Cannot infer type for this parameter. Specify it explicitly.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:182:42 Unresolved reference 'validTracks'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:182:70 Unresolved reference 'sessions'.
-e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:183:43 Unresolved reference 'observedAttempts'.
-gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_4-1789786109271.json
+e: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:89:94 @Composable invocations can only happen from the context of a @Composable function
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_4-1789797770601.json
 
 FAILURE: Build failed with an exception.
 
