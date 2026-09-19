@@ -38,8 +38,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val engine=RecommendationEngine(gateway)
     private val coordinator=QueueCoordinator(db)
     private val learning=LearningStore(db)
-    // Phase 1 §4: the App Remote stream finally has a consumer, so listening becomes evidence.
-    private val observer=PlaybackObserver(db,learning,{ sessionId })
+    // Phase 1 §4/§6: the App Remote stream finally has a consumer, so listening becomes evidence
+    // and the last track of a batch triggers the next one.
+    private val scheduler=NextBatchScheduler { base -> prepareNextBatch(base) }
+    private val observer=PlaybackObserver(db,learning,{ sessionId },System::currentTimeMillis) { id,ordinal,size -> scheduler.onStarted(id,ordinal,size) }
     private val location=LocationAdapter(application)
     private val weather=WeatherRepository()
     private var region: Region?=null
@@ -220,11 +222,30 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if(ui.value.driving) { message("정차 후 선곡을 시작해 주세요"); return }
         cancelSelection()
         val generation = selectionGeneration
-        selectionJob = viewModelScope.launch {
-            mutable.update { it.copy(busy=true) }
+        selectionJob = viewModelScope.launch { runSelection(generation, append = false, baseRevision = null) }
+    }
+
+    /**
+     * Phase 1 §6. Called by the scheduler when the last track of the current batch starts, so the
+     * next three are chosen with the first two tracks' outcomes already counted and reach Spotify's
+     * queue before the current track ends. Unlike the manual path this runs while driving: the
+     * driver asked for nothing, which is the whole point.
+     */
+    private suspend fun prepareNextBatch(baseRevision: Long) {
+        if(survey.value?.completed!=true || ui.value.demo || !spotifyLinked) return
+        if(settings.value.suspendedUntil>System.currentTimeMillis()) return
+        runSelection(selectionGeneration, append = true, baseRevision = baseRevision)
+    }
+
+    private suspend fun runSelection(generation: Int, append: Boolean, baseRevision: Long?) {
+            if(!append) mutable.update { it.copy(busy=true) }
             val snapshot = ui.value
-            val draft=survey.value?:return@launch
+            val draft=survey.value?:return
             val revision=draft.revision
+            // Appending must not repeat what is already queued or still playing. Only the batch now
+            // playing is carried forward, so the list and the observer's plan stay at six.
+            val excluded = if(append) snapshot.queue.map { it.id }.toSet() else emptySet()
+            val carried = if(append) snapshot.queue.takeLast(3) else emptyList()
             try {
                 val config = prefs.flow.first()
                 val ruleSnapshot = dao.rules().first().map { it.domain() }
@@ -238,7 +259,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 }
                 val p=profile();val constraints=Constraints(excludedGenres=p.exclusions)
                 val scores = learning.scores(sessionId,System.currentTimeMillis())
-                fun rank(pool: List<Track>) = TasteRanker.prepare(pool,p,constraints,scores).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
+                fun rank(pool: List<Track>) = TasteRanker.prepare(pool.filter { it.id !in excluded },p,constraints,scores).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
                 var prepared = rank(tracks)
                 if (prepared.isEmpty() && !snapshot.demo) {
                     // SEL04: top up once, then re-read and re-rank inside the same request. Never loop.
@@ -264,7 +285,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val novelty=if(snapshot.demo) emptyMap() else runCatching { ai.drivemuse.app.catalog.NoveltyAnnotator(db.catalog()).annotate(prepared,emptySet(),runtime.historyCoverageSince()) }.getOrDefault(emptyMap())
                 val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,listOf(0,1,2),novelty,MixTarget.resolve(p))
                 val queue=selection.tracks
-                if(generation!=selectionGeneration || survey.value?.revision!=revision) return@launch
+                if(generation!=selectionGeneration || survey.value?.revision!=revision) return
                 // Saying "adjust your rules" is wrong when the pool itself is empty, which is the
                 // common case right after switching providers.
                 check(queue.isNotEmpty()) {
@@ -275,16 +296,31 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                         else -> "후보 ${pool}곡 중 조건을 통과한 곡이 없습니다. 규칙과 제외 조건을 확인해 주세요"
                     }
                 }
-                if(!snapshot.demo && !coordinator.commit(version,queue,prepared,constraints)) return@launch
-                if(generation!=selectionGeneration || survey.value?.revision!=revision) return@launch
+                if(!snapshot.demo && !coordinator.commit(version,queue,prepared,constraints)) return
+                if(generation!=selectionGeneration || survey.value?.revision!=revision) return
+                // T22: a proposal built on a queue revision that has since moved is discarded whole.
+                if(append && !scheduler.accepts(baseRevision!!)) return
                 progress=progress.append(queue)
-                mutable.update { it.copy(queue=queue,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
+                if(append) appendToPlayer(carried,queue)
+                mutable.update { it.copy(queue=if(append) carried+queue else queue,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
             } catch (e: CancellationException) { throw e }
-              catch (e: Exception) { message(explain(e)) }
-            finally { if(generation == selectionGeneration) mutable.update { it.copy(busy=false) } }
-        }
+              catch (e: Exception) { if(!append) message(explain(e)) }
+            finally { if(!append && generation == selectionGeneration) mutable.update { it.copy(busy=false) } }
     }
+
+    /**
+     * Sends the new batch to Spotify's queue. Spotify offers no way to remove a queued item, so a
+     * track that lands here is locked (§6): the batch is only ever sent once, at the moment the
+     * last track of the previous batch starts.
+     */
+    private suspend fun appendToPlayer(carried: List<Track>, queue: List<Track>) {
+        observer.plan(null, carried + queue)
+        var queued = 0
+        for (track in queue) if (runtime.spotifyRemote.queueAwait(track.id) == null) queued++
+        message(if (queued == queue.size) "다음 ${queued}곡을 이어서 준비했어요" else "다음 ${queued}/${queue.size}곡만 준비했어요 · Spotify 연결을 확인해 주세요")
+    }
+
     /** §6.8 — every failure has one recovery path and only re-auth is worth surfacing. */
     private fun explain(e: Throwable): String = when (e) {
         is QuotaExceededException -> "오늘의 조회 한도를 모두 사용했습니다. 저장된 후보로 계속 재생할 수 있어요"
@@ -300,8 +336,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         else -> "Spotify 연결됨"
     }
 
-    private fun cancelSelection() { selectionGeneration++; selectionJob?.cancel(); selectionJob=null; mutable.update { it.copy(busy=false) } }
-    fun suspendAgent() { cancelSelection(); viewModelScope.launch { coordinator.invalidate();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
+    private fun cancelSelection() { selectionGeneration++; selectionJob?.cancel(); selectionJob=null; viewModelScope.launch { scheduler.reset() }; mutable.update { it.copy(busy=false) } }
+    fun suspendAgent() { cancelSelection(); viewModelScope.launch { coordinator.invalidate();observer.release();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
 
     /** One in-flight playback request at a time: a double tap must not queue the batch twice (QUE02). */
     private var playbackJob: Job? = null
@@ -323,7 +359,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             message("Spotify에 연결하는 중…")
             // Registered before the command so the very first callback for this track is observed.
             // Only what the app queued counts; Spotify's own autoplay never scores (§4).
-            observer.plan(null, listOf(track) + following)
+            observer.plan(null, listOf(track) + following); scheduler.reset()
             val remote = runtime.spotifyRemote
             var transport = "App Remote"
             var failure = remote.connect(getApplication())
