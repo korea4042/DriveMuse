@@ -25,7 +25,9 @@ data class UiState(
     val queue: List<Track> = emptyList(), val busy: Boolean = false, val message: String? = null,
     val driving: Boolean = false, val pendingRule: MusicRule? = null,
     val connection: String = "미연결", val reason: String = "좋아하는 음악과 새로운 발견 사이",
-    val engineLabel: String = "초기 취향 · Spotify 재생", val weatherLabel: String = "날씨 정보 없음", val consent: android.app.PendingIntent? = null
+    val engineLabel: String = "초기 취향 · Spotify 재생", val weatherLabel: String = "날씨 정보 없음", val consent: android.app.PendingIntent? = null,
+    /** §7 QUE01: the conditions moved under a list the user can still see and still play. */
+    val queueStale: Boolean = false
 )
 class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val prefs = Preferences(application)
@@ -48,7 +50,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private var weatherFact: WeatherFact?=null
     private var contextVersion=0L
     private var contextJob: Job?=null
-    private val sessionId=UUID.randomUUID().toString()
+    /**
+     * §7: the id is loaded from disk and only rolls over after 30 minutes of inactivity, so session
+     * scores survive a restart instead of resetting every time the app is reopened.
+     */
+    @Volatile private var sessionId=UUID.randomUUID().toString()
+    private suspend fun touchSession() { runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } } }
     private var firstMoodSession: String?=null
     private var progress=DiscoveryProgress()
     private var seedRevision=-1L
@@ -84,6 +91,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         }
         observer.start(viewModelScope,runtime.spotifyRemote.state)
         viewModelScope.launch {
+            touchSession()
             dao.prune(System.currentTimeMillis()-2592000000L);learning.prune(System.currentTimeMillis())
             refreshListening()
             val d=surveyStore.load();draftMutable.value=d
@@ -92,7 +100,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
     private fun changeSurvey(transform: (SurveyDraft)->SurveyDraft) {
         if(ui.value.driving) return
-        cancelSelection();surveyJob?.cancel();engine.clearCache()
+        cancelSelection();surveyJob?.cancel();engine.clearCache();markQueueStale()
         edits.trySend { coordinator.invalidate();val d=draftMutable.value?:surveyStore.load();draftMutable.value=surveyStore.save(transform(d)) }
     }
     fun surveyAnswer(a: SurveyAnswer)=changeSurvey { it.copy(answers=it.answers.filter { old -> old.question.id!=a.question.id }+a) }
@@ -196,7 +204,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun demo(value: Boolean) { cancelSelection();progress=DiscoveryProgress(); mutable.update { it.copy(demo=value,queue=emptyList(),connection=if(value) "데모 · 계정 미연결" else connectionLabel(settings.value)) } }
     fun driving(value: Boolean) { if(value) { cancelSelection();contextJob?.cancel() }; mutable.update { it.copy(driving=value,page="홈") } }
     fun auto(value: Boolean) { if (ui.value.driving) return; viewModelScope.launch { prefs.flag("auto",value) } }
-    fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();viewModelScope.launch { coordinator.invalidate();prefs.ratio(value) } }
+    fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();markQueueStale();viewModelScope.launch { coordinator.invalidate();prefs.ratio(value) } }
     fun choose(context: DriveContext) { if (ui.value.driving) return; suspendAgent();contextVersion++;mutable.update { it.copy(context=context) }; recommend() }
 
     /** §8.5 — sign-in never appears while driving; Spotify consent runs in the browser when parked. */
@@ -238,6 +246,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
 
     private suspend fun runSelection(generation: Int, append: Boolean, baseRevision: Long?) {
+            touchSession()
             if(!append) mutable.update { it.copy(busy=true) }
             val snapshot = ui.value
             val draft=survey.value?:return
@@ -302,7 +311,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 if(append && !scheduler.accepts(baseRevision!!)) return
                 progress=progress.append(queue)
                 if(append) appendToPlayer(carried,queue)
-                mutable.update { it.copy(queue=if(append) carried+queue else queue,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
+                mutable.update { it.copy(queue=if(append) carried+queue else queue,queueStale=false,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
             } catch (e: CancellationException) { throw e }
               catch (e: Exception) { if(!append) message(explain(e)) }
@@ -337,6 +346,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
 
     private fun cancelSelection() { selectionGeneration++; selectionJob?.cancel(); selectionJob=null; viewModelScope.launch { scheduler.reset() }; mutable.update { it.copy(busy=false) } }
+    /**
+     * QUE01: rules and taste changed, so the visible list no longer matches the conditions. It is
+     * marked, not cleared: playing a track from it is still allowed and still checks exclusions,
+     * and a failed re-selection leaves the user with the list they had.
+     */
+    private fun markQueueStale() { if(ui.value.queue.isNotEmpty()) mutable.update { it.copy(queueStale=true) } }
     fun suspendAgent() { cancelSelection(); viewModelScope.launch { coordinator.invalidate();observer.release();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
 
     /** One in-flight playback request at a time: a double tap must not queue the batch twice (QUE02). */
@@ -405,9 +420,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if (parsed==null) message("‘퇴근길/출근길/여행/야간’, ‘잔잔하게·신나게’, ‘새 노래 30%’ 중 하나는 포함해 주세요")
         else mutable.update { it.copy(pendingRule=parsed) }
     }
-    fun confirmRule(save: Boolean) { if(save) cancelSelection(); val r=ui.value.pendingRule; mutable.update { it.copy(pendingRule=null) }; if(save && r!=null && !ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(RuleEntity.from(r)) } }
-    fun deleteRule(id: String) { cancelSelection(); if (!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.deleteRule(id) } }
-    fun toggleRule(rule: RuleEntity) { cancelSelection(); if(!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(rule.copy(enabled=!rule.enabled)) } }
+    fun confirmRule(save: Boolean) { if(save) { cancelSelection();markQueueStale() }; val r=ui.value.pendingRule; mutable.update { it.copy(pendingRule=null) }; if(save && r!=null && !ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(RuleEntity.from(r)) } }
+    fun deleteRule(id: String) { cancelSelection();markQueueStale(); if (!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.deleteRule(id) } }
+    fun toggleRule(rule: RuleEntity) { cancelSelection();markQueueStale(); if(!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(rule.copy(enabled=!rule.enabled)) } }
     fun feedback(id: String, feedback: String) { if(!ui.value.driving) viewModelScope.launch { dao.feedback(id,feedback) } }
     fun registerVehicle(id: String,name: String) { if(ui.value.driving) return; viewModelScope.launch { prefs.string("vehicleId",id); prefs.string("vehicleName",name); prefs.flag("connected",false); message("차량을 등록했습니다. 다음 연결부터 감지합니다") } }
     fun classifyNow() {

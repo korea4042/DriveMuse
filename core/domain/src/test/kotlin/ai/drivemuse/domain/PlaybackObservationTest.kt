@@ -109,3 +109,29 @@ class GenreMapTest {
         assertFalse(constraints.allows(classical))
     }
 }
+
+/** Phase 1 §7, T21: diversity is a preference in the ranking, never a reason to return fewer. */
+class SameArtistFillTest {
+    private fun track(id: String, artist: String, affinity: Double = .8) =
+        Track(id.padEnd(22, 'x'), "T$id", artist, familiar = true, affinity = affinity)
+
+    @Test fun oneArtistStillFillsTheBatch() {
+        val pool = listOf(track("a", "Solo"), track("b", "Solo"), track("c", "Solo"))
+        val chosen = SessionRanker.select(pool, EffectiveRules(.35, 1.0), DiscoveryProgress())
+        assertEquals(3, chosen.size)
+        assertEquals(3, chosen.map { it.id }.distinct().size)
+    }
+
+    /** With a real alternative available, the other artist is preferred over a repeat. */
+    @Test fun anotherArtistWinsWhenCloseEnough() {
+        val pool = listOf(track("a", "Solo", .9), track("b", "Solo", .85), track("c", "Other", .8))
+        val chosen = SessionRanker.select(pool, EffectiveRules(.35, 1.0), DiscoveryProgress(), count = 2)
+        assertEquals(listOf("Solo", "Other"), chosen.map { it.artist })
+    }
+
+    /** A clearly better track by the same artist still wins: the penalty is .10, not a veto. */
+    @Test fun penaltyDoesNotOverrideALargeGap() {
+        val pool = listOf(track("a", "Solo", .9), track("b", "Solo", .85), track("c", "Other", .2))
+        assertEquals(listOf("Solo", "Solo"), SessionRanker.select(pool, EffectiveRules(.35, 1.0), DiscoveryProgress(), count = 2).map { it.artist })
+    }
+}

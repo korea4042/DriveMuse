@@ -29,7 +29,11 @@ data class Settings(
     val tasteSyncedAt: Long = 0,
     val searchCalls: Int = 0,
     val quotaDay: Long = 0,
-    val regionCode: String = "KR"
+    val regionCode: String = "KR",
+    // §7: a drive session outlives the process. Restarting the app is not a new session.
+    val sessionId: String = "",
+    val sessionStartedAt: Long = 0,
+    val sessionLastActivityAt: Long = 0
 )
 class Preferences(private val context: Context) {
     val flow = context.driveStore.data.map { p ->
@@ -45,7 +49,10 @@ class Preferences(private val context: Context) {
             p[longPreferencesKey("tasteSyncedAt")] ?: 0,
             p[intPreferencesKey("searchCalls")] ?: 0,
             p[longPreferencesKey("quotaDay")] ?: 0,
-            p[stringPreferencesKey("regionCode")] ?: "KR"
+            p[stringPreferencesKey("regionCode")] ?: "KR",
+            p[stringPreferencesKey("sessionId")] ?: "",
+            p[longPreferencesKey("sessionStartedAt")] ?: 0,
+            p[longPreferencesKey("sessionLastActivityAt")] ?: 0
         )
     }
     suspend fun flag(key: String, value: Boolean) { context.driveStore.edit { it[booleanPreferencesKey(key)] = value } }
@@ -67,6 +74,23 @@ class Preferences(private val context: Context) {
             if(Quota.canSearch(calls)) { p[longPreferencesKey("quotaDay")]=today;p[intPreferencesKey("searchCalls")]=calls+1;accepted=true }
         }
         return accepted
+    }
+    /**
+     * §7: one drive is one session. The id survives a restart and only rolls over after the gap
+     * below, so the session learning rate applies to a drive rather than to a process lifetime.
+     */
+    suspend fun session(now: Long, gapMs: Long = 30 * 60 * 1000L, newId: () -> String): String {
+        var id = ""
+        context.driveStore.edit { p ->
+            val current = p[stringPreferencesKey("sessionId")].orEmpty()
+            val last = p[longPreferencesKey("sessionLastActivityAt")] ?: 0
+            id = if (current.isBlank() || now - last > gapMs || now < last) newId().also {
+                p[stringPreferencesKey("sessionId")] = it
+                p[longPreferencesKey("sessionStartedAt")] = now
+            } else current
+            p[longPreferencesKey("sessionLastActivityAt")] = now
+        }
+        return id
     }
     suspend fun clear() { context.driveStore.edit { it.clear() } }
 }

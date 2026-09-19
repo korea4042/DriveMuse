@@ -66,14 +66,18 @@ data class DiscoveryProgress(val total: Int = 0, val discoveries: Int = 0) {
     fun append(tracks: List<Track>) = copy(total=total+tracks.size,discoveries=discoveries+tracks.count { !it.familiar })
 }
 object SessionRanker {
+    /** A ranking nudge, not a rule: §30 forbids letting diversity shrink a batch. */
+    const val REPEAT_ARTIST_PENALTY = .10
     fun select(tracks: List<Track>, rules: EffectiveRules, progress: DiscoveryProgress, count: Int = 3): List<Track> {
-        val pool=tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.sortedByDescending { .4*it.affinity+.25*it.contextFit+.15*it.freshness-it.fatigue }.toMutableList()
+        val pool=tracks.distinctBy { it.id }.filter { !it.skipped && rules.allowsEnergy(it) }.toMutableList()
         val result=mutableListOf<Track>()
         while(result.size<count && pool.isNotEmpty()) {
             val wantNew=progress.discoveries+result.count { !it.familiar } < (progress.total+result.size+1)*rules.discovery
-            val eligible=pool.filter { it.artist!=result.lastOrNull()?.artist }
-            if(eligible.isEmpty()) break
-            val next=eligible.firstOrNull { !it.familiar==wantNew }?:eligible.first(); result+=next; pool.remove(next)
+            // QUE03: back-to-back by the same artist is worth avoiding, but not worth returning a
+            // short batch for. A library of one artist still gets three tracks.
+            fun rank(t: Track)= .4*t.affinity+.25*t.contextFit+.15*t.freshness-t.fatigue-(if(t.artist==result.lastOrNull()?.artist) REPEAT_ARTIST_PENALTY else 0.0)
+            val ordered=pool.sortedByDescending(::rank)
+            val next=ordered.firstOrNull { !it.familiar==wantNew }?:ordered.first(); result+=next; pool.remove(next)
         }
         return result
     }

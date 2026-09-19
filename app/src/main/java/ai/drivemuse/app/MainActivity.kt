@@ -118,14 +118,14 @@ class MainActivity: ComponentActivity() {
                         Text(ui.context.mix,fontSize=34.sp,fontWeight=FontWeight.Bold,letterSpacing=(-1).sp)
                         Text(when(ui.context) { DriveContext.COMMUTE_HOME -> "하루의 속도를, 조금 천천히."; DriveContext.COMMUTE_TO_WORK -> "기분 좋은 시작을 위한 리듬."; DriveContext.TRAVEL -> "익숙한 길 너머, 새로운 음악."; else -> "지금 이 순간에 어울리는 사운드." },color=DriveColors.Muted)
                         Text(ui.reason,fontSize=12.sp,color=DriveColors.Muted,lineHeight=19.sp)
-                        DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else "Spotify에서 재생",!ui.busy) {
-                            if(ui.queue.isEmpty()) vm.recommend() else if(ui.demo) vm.message("샘플 곡입니다. 설정에서 데모 모드를 끄고 Google 계정을 연결해 주세요") else vm.handoff(ui.queue.first())
+                        DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else if(ui.queueStale) "조건이 바뀌었어요 · 다시 고르기" else "Spotify에서 재생",!ui.busy) {
+                            if(ui.queue.isEmpty() || ui.queueStale) vm.recommend() else if(ui.demo) vm.message("샘플 곡입니다. 설정에서 데모 모드를 끄고 Google 계정을 연결해 주세요") else vm.handoff(ui.queue.first())
                         }
                         if(ui.queue.isNotEmpty()) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { TextButton(onClick={ vm.recommend() }) { Text("다른 믹스 고르기") }; if(!ui.demo) TextButton(onClick={ vm.skipCurrent() }) { Text("다음 곡으로") } }
                         Text("재생과 차량 디스플레이는 Spotify가 담당해요.",fontSize=11.sp,color=DriveColors.Muted)
                     } }
                     item { GlassSurface { Row(verticalAlignment=Alignment.CenterVertically) { AgentOrb(active=settings.suspendedUntil<System.currentTimeMillis()); Column(Modifier.weight(1f).padding(start=14.dp)) { Text(if(settings.suspendedUntil>System.currentTimeMillis()) "사용자 선택 유지 중" else "당신의 뮤직 에이전트",fontWeight=FontWeight.SemiBold); Text(ui.engineLabel,color=DriveColors.Muted,fontSize=12.sp) }; IconButton(onClick={ vm.page("에이전트") }) { Icon(Icons.Outlined.ChevronRight,"에이전트 설정") } }; Text(ui.connection,fontSize=12.sp,color=DriveColors.Cyan) } }
-                    if(ui.queue.isNotEmpty()) { item { Section("이번 드라이브의 음악", "${ui.queue.size}곡") }; items(ui.queue,key={it.id}) { track -> Column { TrackRow(track,ui.demo) { if(ui.demo) vm.message("데모 곡은 재생할 수 없습니다") else vm.handoff(track) };if(!ui.demo) Row { TextButton(onClick={vm.rate(track,true)}) {Text("좋아요")};TextButton(onClick={vm.rate(track,false)}) {Text("싫어요")} } } } }
+                    if(ui.queue.isNotEmpty()) { item { Section("이번 드라이브의 음악", if(ui.queueStale) "조건이 바뀌었어요 · 다시 고르기" else "${ui.queue.size}곡") }; items(ui.queue,key={it.id}) { track -> Column { TrackRow(track,ui.demo) { if(ui.demo) vm.message("데모 곡은 재생할 수 없습니다") else vm.handoff(track) };if(!ui.demo) Row { TextButton(onClick={vm.rate(track,true)}) {Text("좋아요")};TextButton(onClick={vm.rate(track,false)}) {Text("싫어요")} } } } }
                     item { Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { TextButton(onClick={ vm.page("기록") }) { Text("추천 기록") }; TextButton(onClick={ vm.driving(true) }) { Text("운전 모드 시작") } } }
                 }
                 "탐색" -> {
