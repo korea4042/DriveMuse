@@ -24,7 +24,7 @@ class RecommendationEngine(private val gateway: RoleGateway) {
         }
     }
     suspend fun select(enabled: Boolean, candidates: List<Track>, fallback: List<Track>, profile: SurveyProfile, semantic: JSONObject, review: List<Outcome>, constraints: Constraints, discovery: Double, progress: DiscoveryProgress, version: QueueVersion? = null, queueRevision: Long = 0, replaceableOrdinals: List<Int> = listOf(0,1,2), novelty: Map<String,CandidateNovelty> = emptyMap(), mix: MixTarget = MixTarget.DEFAULT): Selection {
-        if(!enabled || !gateway.configured) return Selection(fallback,"초기 취향 · 로컬 추천 · L0 열기 전용")
+        if(!enabled || !gateway.configured) return Selection(fallback,"초기 취향 · 로컬 추천 · Spotify 재생")
         val result=withTimeoutOrNull(20000) {
             try {
                 val key=semantic.toString()
@@ -59,10 +59,10 @@ class RecommendationEngine(private val gateway: RoleGateway) {
                 val ids=JsonGate.strings(selected.getJSONArray("trackIds"),3)
                 val unmet=JsonGate.strings(selected.getJSONArray("unmetConditions"),5)
                 // §11: 0–2 tracks with reasons is a valid answer; the local fallback fills nothing silently.
-                if(ids.isEmpty()) Selection(fallback,"AI 후보 부족 · 로컬 추천 · L0 열기 전용",JsonGate.string(selected,"adjustment"),unmet)
-                else Selection(ids.map { id -> candidates.single { it.id==id } },"Gemini · 검증된 ${ids.size}곡 · L0 열기 전용",JsonGate.string(selected,"adjustment"),unmet)
-            } catch(e: CancellationException) { throw e } catch(_: Exception) { Selection(fallback,"AI 응답 미적용 · 로컬 추천 · L0 열기 전용") }
+                if(ids.isEmpty()) Selection(fallback,"AI 후보 부족 · 로컬 추천 · Spotify 재생",JsonGate.string(selected,"adjustment"),unmet)
+                else Selection(ids.map { id -> candidates.single { it.id==id } },"Gemini · 검증된 ${ids.size}곡 · Spotify 재생",JsonGate.string(selected,"adjustment"),unmet)
+            } catch(e: CancellationException) { throw e } catch(_: Exception) { Selection(fallback,"AI 응답 미적용 · 로컬 추천 · Spotify 재생") }
         }
-        return result?:Selection(fallback,"AI 시간 초과 · 로컬 추천 · L0 열기 전용")
+        return result?:Selection(fallback,"AI 시간 초과 · 로컬 추천 · Spotify 재생")
     }
 }
