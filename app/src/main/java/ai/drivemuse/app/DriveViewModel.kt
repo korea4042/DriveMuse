@@ -216,7 +216,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                     repository.candidates(snapshot.context, config)
                 }
                 val p=profile();val constraints=Constraints(excludedGenres=p.exclusions)
-                fun rank(pool: List<Track>) = TasteRanker.prepare(pool,p,constraints,learning.scores(sessionId,System.currentTimeMillis())).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
+                val scores = learning.scores(sessionId,System.currentTimeMillis())
+                fun rank(pool: List<Track>) = TasteRanker.prepare(pool,p,constraints,scores).filter { effective.allowsEnergy(it) }.sortedByDescending { it.affinity-it.fatigue }.take(40)
                 var prepared = rank(tracks)
                 if (prepared.isEmpty() && !snapshot.demo) {
                     // SEL04: top up once, then re-read and re-rank inside the same request. Never loop.
