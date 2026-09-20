@@ -68,6 +68,10 @@ data class PlaybackEventEntity(@PrimaryKey val eventId: String, val attemptId: S
     @Query("DELETE FROM outcomes WHERE createdAt<:cutoff") abstract suspend fun pruneOutcomes(cutoff: Long)
     @Query("DELETE FROM batches WHERE createdAt<:cutoff") abstract suspend fun pruneBatches(cutoff: Long)
     @Query("DELETE FROM outcomes") abstract suspend fun clearOutcomes()
+    /** Implicit rows are the derived listening metrics; explicit ratings are the user's own words. */
+    @Query("DELETE FROM outcomes WHERE explicit=0") abstract suspend fun clearImplicitOutcomes()
+    @Query("SELECT count(*) FROM outcomes WHERE explicit=0") abstract suspend fun implicitOutcomeCount(): Int
+    @Query("DELETE FROM intelligence_state WHERE `key`=:key") abstract suspend fun clearStateKey(key: String)
     @Query("DELETE FROM batches") abstract suspend fun clearBatches()
     @Query("DELETE FROM intelligence_state WHERE `key` NOT IN ('survey','survey_profile','ai_quota')") abstract suspend fun clearAnalysis()
     @Query("DELETE FROM intelligence_state WHERE `key` != 'ai_quota'") abstract suspend fun clearState()

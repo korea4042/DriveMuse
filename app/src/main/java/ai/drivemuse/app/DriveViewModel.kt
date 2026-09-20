@@ -103,8 +103,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         viewModelScope.launch {
             for(edit in edits) { surveyBusyMutable.value=true;try { edit() } catch(e: CancellationException) { throw e } catch(e: Exception) { message(explain(e)) } finally { surveyBusyMutable.value=false } }
         }
-        observer.start(viewModelScope,runtime.spotifyRemote.state)
         viewModelScope.launch {
+            // FIX-A: the observer is not collecting yet, so nothing can write a new implicit row
+            // between the purge and the restart.
+            val removed=runCatching { learning.purgeDerivedLearning() }.getOrDefault(0)
+            observer.start(viewModelScope,runtime.spotifyRemote.state)
+            if(removed>0) message("청취 기반 학습을 보류하면서 기존 관측 학습 기록 ${removed}건을 삭제했습니다. 설문과 직접 평가는 유지합니다")
             touchSession()
             dao.prune(System.currentTimeMillis()-2592000000L);learning.prune(System.currentTimeMillis())
             refreshListening()
@@ -202,7 +206,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             val id="explicit:$sessionId:${track.id}"
             db.withTransaction { val version=(intelligence.outcome(id)?.version?:0)+1;intelligence.acceptOutcome(OutcomeEntity(id,track.id,sessionId,version,if(positive) 1.0 else -1.0,true,System.currentTimeMillis())) }
             refreshListening()
-            coordinator.invalidate();message("명시적 평가를 다음 추천에 반영합니다")
+            coordinator.invalidate()
+            // FIX-A item 5: stored, but nothing in direct-input mode consumes it yet. Saying it is
+            // applied would be the same overclaim the mode exists to stop making.
+            message(if(Policy.DIRECT_INPUT_ONLY) "평가를 기록했습니다. 현재 선곡 모드에는 아직 반영되지 않습니다" else "명시적 평가를 다음 추천에 반영합니다")
         }
     }
     private fun refreshListening() { viewModelScope.launch { listeningMutable.value=runCatching { learning.summary() }.getOrDefault(ListeningSummary()) } }
@@ -343,14 +350,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 }
                 val direct=if(Policy.DIRECT_INPUT_ONLY) DirectInputSelector.select(prepared,constraints,sessionId,excluded) else null
                 val fallback=direct?.tracks ?: SessionRanker.select(prepared,effective,progress)
-                val outcomes=intelligence.outcomes().filter { it.sessionId==sessionId }.sortedBy { it.createdAt }.map(learning::outcome)
+                // FIX-A: not read, not merely unused. Both of these are derived from observation.
+                val outcomes=if(Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) intelligence.outcomes().filter { it.sessionId==sessionId }.sortedBy { it.createdAt }.map(learning::outcome) else emptyList()
                 val version=QueueVersion(sessionId,generation.toLong(),revision,contextVersion,outcomes.maxOfOrNull { it.version }?:0,UUID.randomUUID().toString())
                 coordinator.begin(version)
                 val now=System.currentTimeMillis();val validRegion=region?.takeIf { now-it.measuredAt in 0..120000 }
                 val validWeather=validRegion?.let { r -> weatherFact?.takeIf { it.usable(r.id,now) } }
                 val semantic=JSONObject().put("zone",validRegion?.zone?.name?:"UNKNOWN").put("timeOfDay",LocalDateTime.now().hour).put("origin","UNKNOWN").put("direction","UNKNOWN")
                 validWeather?.let { semantic.put("weather",JSONObject().put("temperature",it.temperature).put("precipitation",it.precipitation).put("stale",it.stale(now))) }
-                val novelty=if(snapshot.demo) emptyMap() else runCatching { ai.drivemuse.app.catalog.NoveltyAnnotator(db.catalog()).annotate(prepared,emptySet(),runtime.historyCoverageSince()) }.getOrDefault(emptyMap())
+                val novelty=if(snapshot.demo || !Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) emptyMap() else runCatching { ai.drivemuse.app.catalog.NoveltyAnnotator(db.catalog()).annotate(prepared,emptySet(),runtime.historyCoverageSince()) }.getOrDefault(emptyMap())
                 val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,(0 until Policy.BATCH_SIZE).toList(),novelty,MixTarget.resolve(p))
                 val queue=selection.tracks
                 if(generation!=selectionGeneration || survey.value?.revision!=revision) return

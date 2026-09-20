@@ -109,6 +109,14 @@ object Policy {
      * Spotify Developer Policy III.13. Turn off only once a permitted signal source exists.
      */
     const val DIRECT_INPUT_ONLY = true
+    /**
+     * Separate from DIRECT_INPUT_ONLY, which only governs what selection reads. This governs
+     * whether Spotify playback observations may be turned into listening ratios, preference scores
+     * or long-term archives at all — Spotify Developer Policy III.13 is about deriving the metrics,
+     * not about which ranker consumes them. Command and slot state for playback control is not
+     * covered and is still recorded.
+     */
+    const val SPOTIFY_BEHAVIOR_LEARNING_ALLOWED = false
     /** v1 requests youtube.readonly only. Write scopes are requested per feature, never at onboarding. */
     const val SCOPE_READONLY = "https://www.googleapis.com/auth/youtube.readonly"
     /** Provider track ids: a Spotify id is 22 base62 characters, an older YouTube id is 11. */

@@ -163,7 +163,9 @@ class MusicRepository(
     )
 
     private suspend fun toTracks(rows: List<CandidateEntity>, context: DriveContext, now: Long): List<Track> {
-        val recentPlays = dao.playedSince(now - fatigueWindow).groupingBy { it }.eachCount()
+        // FIX-A: repeat fatigue is an aggregate over observed Spotify playback. While behaviour
+        // learning is blocked it is not computed, so the rows are not read at all.
+        val recentPlays = if(Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) dao.playedSince(now - fatigueWindow).groupingBy { it }.eachCount() else emptyMap()
         val targetEnergy = when (context) {
             DriveContext.COMMUTE_TO_WORK -> .62
             DriveContext.COMMUTE_HOME -> .45
