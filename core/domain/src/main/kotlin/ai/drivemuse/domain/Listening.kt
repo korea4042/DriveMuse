@@ -105,7 +105,12 @@ class BatchMachine {
     fun suspend() { next=null }
     fun invalidate() { next=null }
 }
-data class WeatherFact(val region: String, val temperature: Double, val precipitation: Int, val observedAt: Long, val source: String = "KMA") {
+/**
+ * §7: source, observation time, *lookup* time, region and freshness are five separate facts and the
+ * screen has to be able to say each of them. `source` no longer defaults to a provider name — the
+ * old "KMA" default outlived the provider it described.
+ */
+data class WeatherFact(val region: String, val temperature: Double, val precipitation: Int, val observedAt: Long, val source: String = "UNKNOWN", val fetchedAt: Long = observedAt) {
     fun usable(regionNow: String, now: Long) = region==regionNow && now-observedAt in 0..3600000 && temperature.isFinite()
     fun stale(now: Long)=now-observedAt>1800000
 }

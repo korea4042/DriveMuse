@@ -52,7 +52,7 @@ class WeatherRepository {
             val observed = LocalDateTime.parse(current.getString("time"))
                 .atZone(ZoneId.of("Asia/Seoul")).toInstant().toEpochMilli()
             val temperature = current.getDouble("temperature_2m")
-            WeatherFact(region.id, temperature, precipitationKind(current), observed, source = "OPEN_METEO")
+            WeatherFact(region.id, temperature, precipitationKind(current), observed, source = "Open-Meteo", fetchedAt = now)
                 .takeIf { it.usable(region.id, now) }?.also { cached = it } ?: valid
         } catch (_: Exception) { valid } finally { connection.disconnect() }
     }

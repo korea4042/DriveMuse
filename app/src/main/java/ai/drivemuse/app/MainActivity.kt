@@ -135,9 +135,16 @@ class MainActivity: ComponentActivity() {
                         Text(ui.context.mix,fontSize=34.sp,fontWeight=FontWeight.Bold,letterSpacing=(-1).sp)
                         Text(when(ui.context) { DriveContext.COMMUTE_HOME -> "하루의 속도를, 조금 천천히."; DriveContext.COMMUTE_TO_WORK -> "기분 좋은 시작을 위한 리듬."; DriveContext.TRAVEL -> "익숙한 길 너머, 새로운 음악."; else -> "지금 이 순간에 어울리는 사운드." },color=DriveColors.Muted)
                         Text(ui.reason,fontSize=12.sp,color=DriveColors.Muted,lineHeight=19.sp)
+                        // UX04: every unmet condition at once, not whichever one won the snackbar.
+                        ui.notices.forEach { notice -> Text("· $notice",fontSize=12.sp,color=DriveColors.Cyan,lineHeight=19.sp) }
                         DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else if(ui.needsReselect) "조건이 바뀌었어요 · 다시 고르기" else "Spotify에서 재생",!ui.busy) {
                             if(ui.queue.isEmpty() || ui.needsReselect) vm.recommend() else if(ui.demo) vm.message("샘플 곡입니다. 설정에서 데모 모드를 끄고 Google 계정을 연결해 주세요") else vm.handoff(ui.queue.first())
                         }
+                        // §3: the state of this button's work, next to this button.
+                        OperationStatus(rememberOperation(vm,OperationRegistry.SELECTION),
+                            onCancel={ vm.cancelOperation(OperationRegistry.SELECTION) },
+                            onDismiss={ vm.dismissOperation(OperationRegistry.SELECTION) },
+                            onRetry={ vm.recommend() })
                         if(ui.queue.isNotEmpty()) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { TextButton(onClick={ vm.recommend() }) { Text("다른 믹스 고르기") }; if(!ui.demo) TextButton(onClick={ vm.skipCurrent() }) { Text("다음 곡으로") } }
                         Text("재생과 차량 디스플레이는 Spotify가 담당해요.",fontSize=11.sp,color=DriveColors.Muted)
                     } }
@@ -178,7 +185,7 @@ class MainActivity: ComponentActivity() {
                 }
                 "설정/재생" -> item { PlaybackDetail(diagnostic.state.toString(),diagnostic.hasMediaId,diagnostic.positionMs,ai.drivemuse.app.playback.MediaObservationService.granted(appContext)) { appContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } }
                 "설정/AI" -> item { AiDetail(cvm,vm.aiConfigured,survey?.aiConsent==true,ui.driving,vm::surveyConsent) { vm.message("Firebase 콘솔 → 프로젝트 설정에서 프로젝트 ID·앱 ID·웹 API 키를 확인하고, 사용할 모델 ID를 함께 입력하세요") } }
-                "설정/위치" -> item { WeatherDetail(vm,cvm,ui.weatherLabel,ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } }
+                "설정/위치" -> item { WeatherDetail(vm,cvm,ui.weatherLabel,ui.weatherDetail,ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } }
                 "설정/장소" -> item { PlacesDetail(vm,{deleteWhat="home"},{deleteWhat="work"},{deleteWhat="zones"},ui.driving) }
                 "설정/수집" -> item { CollectionDetail(vm,cvm,ui.driving) }
                 "설정/차량" -> {
