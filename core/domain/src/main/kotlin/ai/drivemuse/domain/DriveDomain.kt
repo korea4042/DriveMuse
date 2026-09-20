@@ -103,6 +103,12 @@ object Policy {
     const val MAX_PER_ARTIST = 2
     /** How much recognisability counts. Discovery should mean unheard, not obscure. */
     const val RECOGNISABILITY_WEIGHT = .20
+    /**
+     * Reduced mode: select from the user's own stated rules only, never from scores derived by
+     * analysing Spotify data (affinity, provider popularity, freshness, observation learning).
+     * Spotify Developer Policy III.13. Turn off only once a permitted signal source exists.
+     */
+    const val DIRECT_INPUT_ONLY = true
     /** v1 requests youtube.readonly only. Write scopes are requested per feature, never at onboarding. */
     const val SCOPE_READONLY = "https://www.googleapis.com/auth/youtube.readonly"
     /** Provider track ids: a Spotify id is 22 base62 characters, an older YouTube id is 11. */

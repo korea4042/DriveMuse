@@ -313,11 +313,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                     repository.candidates(snapshot.context, config)
                 }
                 val p=profile();val constraints=Constraints(excludedGenres=p.exclusions)
-                val scores = learning.scores(sessionId,System.currentTimeMillis())
+                // Reduced mode reads no learned scores at all: not blocking new writes only, but
+                // not reading the stored ones either (III.13).
+                val scores = if(Policy.DIRECT_INPUT_ONLY) emptyMap() else learning.scores(sessionId,System.currentTimeMillis())
                 // Recognisability belongs in the cut to forty too: a well-known track that never
                 // reaches the shortlist can never be chosen from it.
-                fun rank(pool: List<Track>) = TasteRanker.prepare(pool.filter { it.id !in excluded },p,constraints,scores).filter { effective.allowsEnergy(it) }
-                    .sortedByDescending { it.affinity + Policy.RECOGNISABILITY_WEIGHT*it.recognisability - it.fatigue }.take(40)
+                fun rank(pool: List<Track>) =
+                    if(Policy.DIRECT_INPUT_ONLY) pool.filter { it.id !in excluded && constraints.allows(it) }.distinctBy { it.id }
+                    else TasteRanker.prepare(pool.filter { it.id !in excluded },p,constraints,scores).filter { effective.allowsEnergy(it) }
+                        .sortedByDescending { it.affinity + Policy.RECOGNISABILITY_WEIGHT*it.recognisability - it.fatigue }.take(40)
                 var prepared = rank(tracks)
                 if (prepared.isEmpty() && !snapshot.demo && offered.isNotEmpty() && !append) {
                     // Every remaining candidate has already been offered. Starting the rotation over
@@ -339,7 +343,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                         error(reason)
                     }
                 }
-                val fallback=SessionRanker.select(prepared,effective,progress)
+                val direct=if(Policy.DIRECT_INPUT_ONLY) DirectInputSelector.select(prepared,constraints,sessionId,excluded) else null
+                val fallback=direct?.tracks ?: SessionRanker.select(prepared,effective,progress)
                 val outcomes=intelligence.outcomes().filter { it.sessionId==sessionId }.sortedBy { it.createdAt }.map(learning::outcome)
                 val version=QueueVersion(sessionId,generation.toLong(),revision,contextVersion,outcomes.maxOfOrNull { it.version }?:0,UUID.randomUUID().toString())
                 coordinator.begin(version)
@@ -368,8 +373,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 progress=progress.append(queue)
                 offered.addAll(queue.map { it.id })
                 if(append) appendToPlayer(carried,queue)
-                mutable.update { it.copy(queue=if(append) carried+queue else queue,queueStale=false,engineLabel=selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
+                val shortfall=direct?.takeIf { it.short }
+                mutable.update { it.copy(queue=if(append) carried+queue else queue,queueStale=false,engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
+                // Say the pool is short rather than padding it out of the scored ranking.
+                if(shortfall!=null && !append) message("조건을 통과한 후보가 ${shortfall.eligible}곡이라 ${queue.size}곡만 준비했어요. 제외 조건을 확인하거나 후보를 더 불러와 주세요")
             } catch (e: CancellationException) { throw e }
               catch (e: Exception) { if(!append) message(explain(e)) }
             finally { if(!append && generation == selectionGeneration) mutable.update { it.copy(busy=false) } }
