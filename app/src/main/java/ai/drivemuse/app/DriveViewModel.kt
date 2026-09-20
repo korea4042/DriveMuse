@@ -198,6 +198,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if(ui.value.driving) return
         contextJob?.cancel();contextJob=operations.start(OperationKind.CONTEXT,OperationRegistry.CONTEXT) { op ->
             op.stage(OperationStage.CONNECTING)
+            // The repository serves its cache while the five-minute throttle holds, and that cache
+            // is identical to a fresh answer in every field but this one.
+            val fetchedBefore=weatherFact?.fetchedAt
             val outcome=location.refresh()
             region=outcome.region ?: location.lastKnown()
             // A failed fix does not invalidate a forecast already held for the same region: the
@@ -214,12 +217,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "${fact.source} · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"}${if(fact.stale(now)) " · 오래된 관측" else ""}",
                 weatherDetail=if(fact==null) "날씨 없음 · 지역 ${region?.id ?: "미확인"}"
                     else "출처 ${fact.source} · 지역 ${fact.region} · 관측 ${clock(fact.observedAt)} · 조회 ${clock(fact.fetchedAt)} · ${if(fact.stale(now)) "오래된 관측" else "최신"}") }
-            message(when {
-                fact!=null && outcome.status==LocationStatus.AVAILABLE -> "날씨를 갱신했습니다"
-                fact!=null -> "위치를 새로 확인하지 못해 직전 지역의 날씨를 그대로 사용합니다"
-                else -> outcome.status.advice.ifBlank { "날씨를 가져오지 못했어요. 기본 상황으로 추천합니다" }
-            })
-            op.confirm(if(fact!=null) "날씨를 갱신했어요" else "위치·날씨 없이 계속합니다")
+            val refresh=ContextRefresh.of(fact!=null,fact!=null && fact.fetchedAt!=fetchedBefore)
+            message(refresh.detail)
+            when(refresh) {
+                ContextRefresh.REFRESHED, ContextRefresh.REUSED -> op.confirm(refresh.detail)
+                // There is something actionable to say here, so it is a failure with advice, not a
+                // success that happens to have no weather in it.
+                ContextRefresh.NONE -> error(outcome.status.advice.ifBlank { refresh.detail })
+            }
         }
     }
     /** Registered zones, so the screen shows whether saving actually worked (§24). */
@@ -260,7 +265,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 onFailure = { "후보 ${after}곡 · $probe · 실패: " + (it.message ?: it::class.simpleName) }
             )
             message(poolMutable.value)
-            op.confirm("후보 ${after}곡")
+            // The count is what survived, not what this refresh achieved. Confirming on the count
+            // reported a failed refresh as a success whenever the old pool was still there.
+            when(val result = PoolRefresh.of(before, after, outcome.exceptionOrNull()?.let { it.message ?: it::class.simpleName ?: "조회 실패" })) {
+                is PoolRefresh.Refreshed -> op.confirm(result.detail)
+                is PoolRefresh.Failed -> error(result.detail)
+            }
         }==null) message("이미 처리 중이에요")
     }
     fun refreshZones() { zonesMutable.value = runCatching { location.registeredZones() }.getOrDefault(emptySet()) }
@@ -383,7 +393,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 PrepareOutcome.Prepared -> op.confirm("${ui.value.queue.size}곡을 준비했어요")
                 is PrepareOutcome.RetryableFailure -> error(outcome.reason)
                 is PrepareOutcome.Exhausted -> error(outcome.reason)
-                PrepareOutcome.Stale -> Unit
+                // Every branch is stated. SELECTION requires confirmation, so a branch that
+                // forgot to say what happened would settle UNKNOWN rather than quietly succeed.
+                PrepareOutcome.Stale -> op.discard("조건이 바뀌어 이번 결과는 적용하지 않았어요 · 다시 골라 주세요")
             }
         }
     }

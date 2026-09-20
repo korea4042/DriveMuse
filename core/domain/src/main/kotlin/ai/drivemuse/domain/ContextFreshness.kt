@@ -55,3 +55,49 @@ enum class LocationStatus {
         UNAVAILABLE -> "위치를 확인할 수 없어 기본 상황으로 추천합니다"
     }
 }
+
+/**
+ * §7/§3: the three outcomes of a context refresh, which the first version collapsed into two.
+ *
+ * "날씨를 갱신했습니다" was shown whenever a usable fact existed afterwards — including when the
+ * position lookup had failed and the fact on screen was the one already held. Reuse is a fine
+ * result, but it is not a refresh and must not be reported as one.
+ */
+enum class ContextRefresh(val detail: String) {
+    REFRESHED("날씨를 갱신했어요"),
+    REUSED("새 위치를 확인하지 못해 직전에 받아둔 같은 지역 날씨를 그대로 씁니다"),
+    NONE("날씨를 확인하지 못했어요");
+
+    val refreshed get() = this == REFRESHED
+
+    companion object {
+        /**
+         * [fetchedAtChanged] is the only evidence that a lookup actually happened: the repository
+         * returns its cache when the five-minute throttle is in force, and that cache is
+         * indistinguishable from a fresh answer by any other field.
+         */
+        fun of(hasUsableFact: Boolean, fetchedAtChanged: Boolean) = when {
+            hasUsableFact && fetchedAtChanged -> REFRESHED
+            hasUsableFact -> REUSED
+            else -> NONE
+        }
+    }
+}
+
+/**
+ * §3: what a pool refresh actually achieved. A candidate count is not evidence of a successful
+ * refresh — the pool that is still there is the pool that was already there.
+ */
+sealed interface PoolRefresh {
+    data class Refreshed(val total: Int, val added: Int) : PoolRefresh {
+        val detail get() = if (added > 0) "후보 ${total}곡 · 새로 ${added}곡" else "후보 ${total}곡 · 새로 추가된 곡 없음"
+    }
+    data class Failed(val kept: Int, val reason: String) : PoolRefresh {
+        val detail get() = "후보를 갱신하지 못했어요 · 기존 ${kept}곡은 그대로예요 · $reason"
+    }
+
+    companion object {
+        fun of(before: Int, after: Int, failure: String?): PoolRefresh =
+            if (failure == null) Refreshed(after, (after - before).coerceAtLeast(0)) else Failed(after, failure)
+    }
+}

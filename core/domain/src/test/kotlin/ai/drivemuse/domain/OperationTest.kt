@@ -43,18 +43,33 @@ class OperationTest {
         assertEquals("취소됨", running(OperationKind.SELECTION).copy(phase = OperationPhase.CANCELLED).label(start))
     }
 
-    @Test fun anUnknownExternalResultIsNeverResent() {
-        val unknown = running(OperationKind.PLAYBACK).copy(phase = OperationPhase.UNKNOWN, retryable = true)
-        assertFalse(unknown.safeToRetry)
-        // Local work whose result is unknown is safe to run again: nothing left the device.
-        val local = running(OperationKind.WEATHER).copy(phase = OperationPhase.UNKNOWN, retryable = true)
-        assertTrue(local.safeToRetry)
+    @Test fun anExternalCommandWhoseFateIsOpenIsNeverResent() {
+        // Unknown and cancelled are the same problem: the command may already be with Spotify.
+        // Cancelling stops the app waiting; it does not reach out and unsend anything.
+        listOf(OperationPhase.UNKNOWN, OperationPhase.CANCELLED).forEach { phase ->
+            assertFalse(phase.name, running(OperationKind.PLAYBACK).copy(phase = phase, retryable = true).safeToRetry)
+        }
+        // Local work in either state is safe to run again: nothing left the device.
+        listOf(OperationPhase.UNKNOWN, OperationPhase.CANCELLED).forEach { phase ->
+            assertTrue(phase.name, running(OperationKind.WEATHER).copy(phase = phase, retryable = true).safeToRetry)
+        }
+        // A failure is still retryable even for an external command: it did not land.
+        assertTrue(running(OperationKind.PLAYBACK).copy(phase = OperationPhase.FAILED, retryable = true).safeToRetry)
     }
 
-    @Test fun onlyPlaybackDemandsSeparateConfirmation() {
-        assertTrue(OperationKind.PLAYBACK.needsConfirmation)
-        assertFalse(OperationKind.SAVE.needsConfirmation)
+    @Test fun everythingThatCanEndWithoutProducingAnythingDemandsConfirmation() {
+        // Selection can end on a stale generation, a pool refresh can fail with the old pool
+        // intact, a context refresh can reuse what it already had. None of those are success.
+        listOf(OperationKind.PLAYBACK, OperationKind.SELECTION, OperationKind.POOL,
+               OperationKind.CONTEXT, OperationKind.LOCATION, OperationKind.WEATHER).forEach {
+            assertTrue(it.name, it.needsConfirmation)
+        }
         assertFalse(OperationKind.WEATHER.external)
+    }
+
+    @Test fun aDeclaredDetailOutranksTheCancelBoilerplate() {
+        val discarded = running().copy(phase = OperationPhase.CANCELLED, detail = "조건이 바뀌었어요")
+        assertEquals("조건이 바뀌었어요", discarded.label(start))
     }
 
     @Test fun everyBudgetIsLongerThanTheSlowThreshold() {

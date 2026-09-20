@@ -32,13 +32,18 @@ enum class OperationKind(
      */
     val needsConfirmation: Boolean = false
 ) {
-    LOCATION("위치를 확인하는 중", 15_000),
-    WEATHER("날씨를 확인하는 중", 12_000),
+    LOCATION("위치를 확인하는 중", 15_000, needsConfirmation = true),
+    WEATHER("날씨를 확인하는 중", 12_000, needsConfirmation = true),
     /** Location then weather behind one button: §3's two budgets back to back, not a new number. */
-    CONTEXT("위치와 날씨를 확인하는 중", 27_000),
-    SELECTION("곡을 고르는 중", 30_000),
+    CONTEXT("위치와 날씨를 확인하는 중", 27_000, needsConfirmation = true),
+    /**
+     * Confirmation is required. A selection can end without producing a batch — a stale generation,
+     * a superseded revision — and finishing without throwing is not evidence that the user got
+     * anything. The first version of this defaulted to false and reported those as success.
+     */
+    SELECTION("곡을 고르는 중", 30_000, needsConfirmation = true),
     PLAYBACK("재생을 요청하는 중", 10_000, external = true, needsConfirmation = true),
-    POOL("후보를 불러오는 중", 30_000),
+    POOL("후보를 불러오는 중", 30_000, needsConfirmation = true),
     SAVE("저장하는 중", 10_000),
     RESET("초기화하는 중", 60_000)
 }
@@ -84,18 +89,23 @@ data class Operation(
         // §3: a timeout is not a confirmed failure, and neither is a cancel of something already
         // sent. Both land here, and neither claims the outside world was left untouched.
         OperationPhase.UNKNOWN -> detail ?: "결과를 확인하지 못했어요"
-        OperationPhase.CANCELLED -> if (kind.external) "취소됨 · 이미 보낸 명령은 되돌리지 못해요" else "취소됨"
+        OperationPhase.CANCELLED -> detail ?: if (kind.external) "취소됨 · 이미 보낸 명령은 되돌리지 못해요" else "취소됨"
         OperationPhase.FAILED -> detail ?: "실패했어요"
     }
 
     /**
-     * §3: do not resend a playback or queue command whose result is unknown. Retrying local work
-     * whose result is unknown is fine; retrying an external command that may already have landed
-     * is how a track gets queued twice.
+     * §3: do not resend an external command that may already have landed. Unknown is the obvious
+     * case; cancelled is the same problem wearing a different label, because cancelling stops the
+     * app waiting and does nothing whatsoever to a command already on its way to Spotify. Both
+     * need the current state read back before anything is sent again.
+     *
+     * Retrying local work in either state is fine: nothing left the device.
      */
-    val safeToRetry get() = retryable && !(phase == OperationPhase.UNKNOWN && kind.external)
+    val safeToRetry get() = retryable && !(kind.external && phase in UNSENT_UNKNOWN)
 
     companion object {
+        /** States in which an external command's fate is unresolved. */
+        private val UNSENT_UNKNOWN = setOf(OperationPhase.UNKNOWN, OperationPhase.CANCELLED)
         const val STAGE_AFTER_MS = 1_000L
         const val SLOW_AFTER_MS = 8_000L
         fun running(id: String, kind: OperationKind, target: String, at: Long) =

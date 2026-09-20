@@ -6,6 +6,7 @@ import ai.drivemuse.domain.OperationPhase
 import ai.drivemuse.domain.OperationStage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
@@ -23,17 +24,23 @@ import java.util.concurrent.ConcurrentHashMap
  * success. Handed to the block; never constructed by callers.
  */
 class OperationHandle internal constructor(val id: String, private val onStage: (OperationStage) -> Unit) {
-    @Volatile internal var confirmed = false
-    @Volatile internal var confirmedDetail: String? = null
+    @Volatile internal var outcome: Pair<OperationPhase, String?>? = null
 
     fun stage(stage: OperationStage) = onStage(stage)
 
     /**
      * §3: "성공 표시는 실제 완료 근거가 있을 때만". For a kind that needs confirmation, returning
      * without calling this settles as UNKNOWN rather than as success — an accepted command is not
-     * a played track.
+     * a played track, and a selection that ended without committing a batch is not a selection.
      */
-    fun confirm(detail: String? = null) { confirmed = true; confirmedDetail = detail }
+    fun confirm(detail: String? = null) { outcome = OperationPhase.SUCCEEDED to detail }
+
+    /**
+     * The work ran to completion and deliberately produced nothing: a stale generation, a revision
+     * that moved under it. Not a failure, not a success, and not "결과를 확인하지 못했어요" either —
+     * the result is perfectly well known and it is that nothing was applied.
+     */
+    fun discard(detail: String) { outcome = OperationPhase.CANCELLED to detail }
 }
 
 /**
@@ -60,36 +67,68 @@ class OperationRegistry(
     /** The verb for whichever operation is running, for the auxiliary bottom notice. */
     fun anyRunning(): Operation? = mutable.value.values.firstOrNull { it.running }
 
-    /** Launches [block] as an operation. Returns null, and does nothing, if the target is busy. */
-    fun start(kind: OperationKind, target: String, block: suspend (OperationHandle) -> Unit): Job? {
-        if (busy(target)) return null
-        val job = scope.launch { run(kind, target, block) }
+    /**
+     * Launches [block] as an operation. Returns null, and does nothing, if the target is busy.
+     *
+     * RUNNING is published here, on the caller's thread, before the coroutine starts: a double tap
+     * arrives faster than a dispatch, and claiming the target inside the launched body left a
+     * window in which both presses saw an idle target (UX01).
+     */
+    fun start(kind: OperationKind, target: String, timeoutMs: Long = kind.timeoutMs, block: suspend (OperationHandle) -> Unit): Job? {
+        val id = claim(kind, target) ?: return null
+        val job = scope.launch { execute(id, kind, target, timeoutMs, block) }
         jobs[target] = job
         return job
     }
 
-    /** The same contract for a caller that is already inside a coroutine it wants to keep. */
-    suspend fun run(kind: OperationKind, target: String, block: suspend (OperationHandle) -> Unit) {
-        if (busy(target)) return
-        val id = UUID.randomUUID().toString()
-        mutable.update { it + (target to Operation.running(id, kind, target, clock())) }
+    /**
+     * The same contract for a caller that is already inside a coroutine it wants to keep. There is
+     * no job to register, so [cancel] cannot reach it; only use it for work that is not cancellable.
+     */
+    suspend fun run(kind: OperationKind, target: String, timeoutMs: Long = kind.timeoutMs, block: suspend (OperationHandle) -> Unit) {
+        val id = claim(kind, target) ?: return
+        execute(id, kind, target, timeoutMs, block)
+    }
+
+    /** Takes the target for a new operation, or returns null because something else holds it. */
+    private fun claim(kind: OperationKind, target: String): String? {
+        var claimed: String? = null
+        mutable.update { current ->
+            if (current[target]?.running == true) { claimed = null; current }
+            else {
+                val id = UUID.randomUUID().toString()
+                claimed = id
+                current + (target to Operation.running(id, kind, target, clock()))
+            }
+        }
+        return claimed
+    }
+
+    private suspend fun execute(id: String, kind: OperationKind, target: String, timeoutMs: Long, block: suspend (OperationHandle) -> Unit) {
         val handle = OperationHandle(id) { stage -> patch(target, id) { op -> op.copy(stage = stage) } }
         try {
-            withTimeout(kind.timeoutMs) { block(handle) }
-            val ok = !kind.needsConfirmation || handle.confirmed
-            settle(target, id, if (ok) OperationPhase.SUCCEEDED else OperationPhase.UNKNOWN,
-                handle.confirmedDetail, retryable = !ok)
+            withTimeout(timeoutMs) { block(handle) }
+            val declared = handle.outcome
+            when {
+                declared != null -> settle(target, id, declared.first, declared.second,
+                    retryable = declared.first != OperationPhase.SUCCEEDED)
+                // Finishing quietly is not evidence. A kind that needs confirmation and did not
+                // get one settles UNKNOWN, which is exactly what the caller left it as.
+                kind.needsConfirmation -> settle(target, id, OperationPhase.UNKNOWN, null, retryable = true)
+                else -> settle(target, id, OperationPhase.SUCCEEDED, null, retryable = false)
+            }
         } catch (t: TimeoutCancellationException) {
             // §3: a timeout is not a confirmed failure. The work may well have landed.
             settle(target, id, OperationPhase.UNKNOWN,
-                "${kind.timeoutMs / 1000}초 안에 결과를 확인하지 못했어요", retryable = true)
+                "${timeoutMs / 1000}초 안에 결과를 확인하지 못했어요", retryable = true)
         } catch (c: CancellationException) {
             withContext(NonCancellable) { settle(target, id, OperationPhase.CANCELLED, null, retryable = true) }
             throw c
         } catch (e: Exception) {
             settle(target, id, OperationPhase.FAILED, explain(e), retryable = true)
         } finally {
-            jobs.remove(target)
+            // Only this operation's own job, never a newer one that has already taken the target.
+            currentCoroutineContext()[Job]?.let { jobs.remove(target, it) }
         }
     }
 
