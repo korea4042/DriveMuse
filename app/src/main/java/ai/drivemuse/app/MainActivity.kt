@@ -187,6 +187,7 @@ class MainActivity: ComponentActivity() {
                 "설정/AI" -> item { AiDetail(cvm,vm.aiConfigured,survey?.aiConsent==true,ui.driving,vm::surveyConsent) { vm.message("Firebase 콘솔 → 프로젝트 설정에서 프로젝트 ID·앱 ID·웹 API 키를 확인하고, 사용할 모델 ID를 함께 입력하세요") } }
                 "설정/위치" -> item { WeatherDetail(vm,cvm,ui.weatherLabel,ui.weatherDetail,ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } }
                 "설정/장소" -> item { PlacesDetail(vm,{deleteWhat="home"},{deleteWhat="work"},{deleteWhat="zones"},ui.driving) }
+                "설정/출퇴근" -> item { CommuteDetail(vm,ui.driving) }
                 "설정/수집" -> item { CollectionDetail(vm,cvm,ui.driving) }
                 "설정/차량" -> {
                     item { SettingsTitle("차량 연결","연결되면 조용한 알림으로 시작합니다") }

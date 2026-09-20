@@ -8,33 +8,12 @@ enum class DriveContext(val label: String, val mix: String) {
     GENERAL_DRIVE("드라이브", "Your Drive Mix"), UNKNOWN("연결 대기", "Find your rhythm")
 }
 enum class Zone { HOME, WORK, USUAL, OUTSIDE, UNKNOWN }
-data class Signals(val connected: Boolean, val time: LocalDateTime, val origin: Zone = Zone.UNKNOWN, val destination: Zone = Zone.UNKNOWN, val longTrip: Boolean = false)
-data class Classification(val context: DriveContext, val confidence: Double, val reasons: List<String>)
-object ContextEngine {
-    fun classify(s: Signals): Classification {
-        if (!s.connected) return Classification(DriveContext.UNKNOWN, 0.0, listOf("차량 미연결"))
-        val minutes = s.time.hour * 60 + s.time.minute
-        val weekday = s.time.dayOfWeek.value <= 5
-        // Travel purpose cannot be inferred from distance.
-        // CTX04: a registered origin is evidence by itself. Leaving home on a weekday morning is a
-        // commute *hypothesis*; it is not an arrival at work, so the destination is never asserted
-        // and origin alone deliberately scores below the threshold automation is allowed to act on.
-        if (weekday && minutes in 390..630 && s.origin == Zone.HOME && s.destination != Zone.HOME) return commute(s, DriveContext.COMMUTE_TO_WORK, Zone.HOME, Zone.WORK)
-        if (weekday && minutes in 1020..1350 && s.origin == Zone.WORK && s.destination != Zone.WORK) return commute(s, DriveContext.COMMUTE_HOME, Zone.WORK, Zone.HOME)
-        // Night is a time attribute, not a purpose or emotional state.
-        return Classification(DriveContext.GENERAL_DRIVE, .5, listOf("차량 연결", "기본 믹스"))
-    }
-    private fun commute(s: Signals, kind: DriveContext, origin: Zone, target: Zone): Classification {
-        val score = (.45 + (if (s.origin == origin) .30 else 0.0) + (if (s.destination == target) .25 else 0.0) - (if (s.longTrip) .15 else 0.0)).coerceIn(0.0, 1.0)
-        val from = when {
-            s.origin == origin && origin == Zone.HOME -> "집에서 출발"
-            s.origin == origin -> "회사에서 출발"
-            else -> "출발 영역 미확인"
-        }
-        val to = if (s.destination == target) "도착 영역 일치" else "도착지는 확인되지 않아 추정입니다"
-        return Classification(kind, score, listOf("평일 시간대", from, to))
-    }
-}
+/**
+ * §2: the classifier that lived here judged commutes from hardcoded 06:30–10:30 and 17:00–22:30
+ * windows and returned a confidence built from hand-picked constants, which the caller then
+ * compared against .8 and discarded. Both are gone. ContextEstimator in Commute.kt reads the
+ * user's own schedule and states its evidence instead of scoring it.
+ */
 data class MusicRule(val id: String, val scope: DriveContext?, val text: String, val discovery: Double? = null, val energyCeiling: Double? = null, val enabled: Boolean = true, val priority: Int = 0, val createdAt: Long = 0)
 data class EffectiveRules(val discovery: Double, val energyCeiling: Double) {
     /** Unknown energy cannot establish a conflict with the requested mood. */

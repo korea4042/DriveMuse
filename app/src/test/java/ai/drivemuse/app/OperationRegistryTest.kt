@@ -213,6 +213,60 @@ class OperationRegistryTest {
         assertEquals(OperationStage.STARTING, op.stage)
     }
 
+    // --- the retry belongs to the operation, not to the screen that started it ---
+
+    @Test fun retryRepeatsTheRequestThatFailed() = runBlocking {
+        val registry = registry()
+        val calls = mutableListOf<String>()
+        // Two different requests on one target, exactly like save and delete on one card.
+        fun save() { registry.start(OperationKind.SAVE, "card", retry = { save() }) { calls += "save"; error("실패") } }
+        fun delete() { registry.start(OperationKind.SAVE, "card", retry = { delete() }) { calls += "delete"; error("실패") } }
+        delete()
+        assertNotNull(settled(registry, "card"))
+        assertEquals(listOf("delete"), calls)
+        assertTrue(registry.canRetry("card"))
+        registry.retry("card")
+        assertNotNull(settled(registry, "card"))
+        // The screen is long gone by now; the retry still has to be the delete.
+        assertEquals(listOf("delete", "delete"), calls)
+    }
+
+    @Test fun startingSomethingElseReplacesTheRetry() = runBlocking {
+        val registry = registry()
+        val calls = mutableListOf<String>()
+        registry.run(OperationKind.SAVE, "card", retry = { calls += "first" }) { error("실패") }
+        registry.run(OperationKind.SAVE, "card", retry = { calls += "second" }) { error("실패") }
+        registry.retry("card")
+        assertEquals(listOf("second"), calls)
+    }
+
+    @Test fun aSuccessfulOperationOffersNoRetry() = runBlocking {
+        val registry = registry()
+        var repeated = false
+        registry.run(OperationKind.SAVE, "card", retry = { repeated = true }) { it.confirm("됐어요") }
+        assertFalse(registry.canRetry("card"))
+        assertFalse(registry.retry("card"))
+        assertFalse(repeated)
+    }
+
+    @Test fun anUnresolvedExternalCommandOffersNoRetryEvenWithOneRegistered() = runBlocking {
+        val registry = registry()
+        var repeated = false
+        registry.run(OperationKind.PLAYBACK, "play", timeoutMs = 50, retry = { repeated = true }) { delay(5_000) }
+        assertEquals(OperationPhase.UNKNOWN, registry.of("play")?.phase)
+        assertFalse(registry.canRetry("play"))
+        assertFalse(repeated)
+    }
+
+    @Test fun dismissingForgetsTheRetryToo() = runBlocking {
+        val registry = registry()
+        var repeated = false
+        registry.run(OperationKind.SAVE, "card", retry = { repeated = true }) { error("실패") }
+        registry.dismiss("card")
+        assertFalse(registry.retry("card"))
+        assertFalse(repeated)
+    }
+
     @Test fun dismissClearsOnlySettledEntries() = runBlocking {
         val registry = registry()
         val release = CompletableDeferred<Unit>()

@@ -39,7 +39,21 @@ data class Settings(
     // §7: a drive session outlives the process. Restarting the app is not a new session.
     val sessionId: String = "",
     val sessionStartedAt: Long = 0,
-    val sessionLastActivityAt: Long = 0
+    val sessionLastActivityAt: Long = 0,
+    /** Commute schedules, encoded by CommuteCodec. Empty means the user has not set any. */
+    val commuteJson: String = "",
+    /** Night band boundaries in minutes from midnight, both configurable per §4. */
+    val nightStartMinutes: Int = 22 * 60,
+    val nightEndMinutes: Int = 6 * 60,
+    /**
+     * §5: the departure point lives outside the ViewModel. Held in memory it was lost whenever the
+     * ViewModel was recreated mid-drive, and the next assessment took wherever the car had reached
+     * as a fresh departure.
+     */
+    val departureAt: Long = 0,
+    val departureZone: String = "UNKNOWN",
+    /** When the car disconnected. Zero while connected; a reconnection inside ten minutes resumes. */
+    val departureEndedAt: Long = 0
 )
 class Preferences(private val context: Context) {
     val flow = context.driveStore.data.map { p ->
@@ -59,9 +73,21 @@ class Preferences(private val context: Context) {
             p[stringPreferencesKey("regionCode")] ?: "KR",
             p[stringPreferencesKey("sessionId")] ?: "",
             p[longPreferencesKey("sessionStartedAt")] ?: 0,
-            p[longPreferencesKey("sessionLastActivityAt")] ?: 0
+            p[longPreferencesKey("sessionLastActivityAt")] ?: 0,
+            p[stringPreferencesKey("commuteSchedules")] ?: "",
+            p[intPreferencesKey("nightStartMinutes")] ?: (22 * 60),
+            p[intPreferencesKey("nightEndMinutes")] ?: (6 * 60),
+            p[longPreferencesKey("departureAt")] ?: 0,
+            p[stringPreferencesKey("departureZone")] ?: "UNKNOWN",
+            p[longPreferencesKey("departureEndedAt")] ?: 0
         )
     }
+    /** Written as one edit so a reader never sees a zone belonging to a different departure. */
+    suspend fun departure(at: Long, zone: String, endedAt: Long) { context.driveStore.edit {
+        it[longPreferencesKey("departureAt")] = at
+        it[stringPreferencesKey("departureZone")] = zone
+        it[longPreferencesKey("departureEndedAt")] = endedAt
+    } }
     suspend fun flag(key: String, value: Boolean) { context.driveStore.edit { it[booleanPreferencesKey(key)] = value } }
     suspend fun string(key: String, value: String) { context.driveStore.edit { it[stringPreferencesKey(key)] = value } }
     suspend fun long(key: String, value: Long) { context.driveStore.edit { it[longPreferencesKey(key)] = value } }
