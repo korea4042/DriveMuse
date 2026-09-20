@@ -115,8 +115,14 @@ import android.view.KeyEvent as AndroidKeyEvent
         GlassSurface {
             Text("받은 입력 ${raw.size}건", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             if (raw.isEmpty()) Text(
-                if (listening) "아직 아무것도 오지 않았어요. 핸들의 다음 곡·이전 곡·재생 버튼을 눌러 보세요. 아무것도 오지 않는다면 이 차량·연결 방식에서는 앱이 버튼 입력을 받지 못한다는 뜻입니다."
+                if (listening) "아직 아무것도 오지 않았어요. 핸들의 다음 곡·이전 곡·재생 버튼을 눌러 보세요."
                 else "테스트를 시작하면 여기에 표시됩니다.",
+                fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
+            // The screen used to read an empty result as "this car does not send the buttons".
+            // It cannot: this hook sits on the focused window, and a Bluetooth AVRCP button is
+            // routed to the media session instead, so it would never appear here even in a car
+            // that sends it. Saying otherwise would have recorded UNSUPPORTED on no evidence.
+            Text("이 진단은 화면에 포커스가 있는 창으로 전달되는 키 입력만 봅니다. 유선·HID 버튼은 이 경로로 오지만, 차량 Bluetooth(AVRCP) 버튼은 미디어 세션으로 바로 전달되어 이 화면을 거치지 않을 수 있습니다. 그래서 아무것도 오지 않는 것은 이 차량이 버튼을 보내지 않는다는 뜻이 아니라, 이 경로로는 오지 않는다는 뜻입니다. Bluetooth 판정은 미디어 세션 콜백을 쓰는 별도 진단이 필요하고 아직 만들지 않았습니다.",
                 fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             raw.takeLast(12).reversed().forEach { key ->
                 Text("${key.keyName} ${if (key.isDown) "누름" else "뗌"}" +
@@ -130,7 +136,7 @@ import android.view.KeyEvent as AndroidKeyEvent
 
         GlassSurface {
             Text("판정 결과", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Text("같은 입력을 실제 판정 로직에 그대로 넣어 본 결과입니다. 명령은 실행하지 않았습니다.",
+            Text("같은 입력을 실제 판정 로직에 그대로 넣어 본 결과입니다. 명령은 실행하지 않았습니다. 좋아요·싫어요는 평가할 곡이 있어야 판정되므로, 여기서는 가상의 곡을 대상으로 넣어 제스처가 인식되는지만 봅니다.",
                 fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             Shortcut.entries.forEach { shortcut ->
                 val run = runs[shortcut] ?: DiagnosticRun(shortcut)
@@ -168,7 +174,7 @@ import android.view.KeyEvent as AndroidKeyEvent
 
         GlassSurface {
             Text("이 진단이 증명하지 못하는 것", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Text("화면이 꺼져 있거나 다른 앱이 앞에 있을 때, Spotify가 미디어 세션을 쥐고 있을 때도 같은 입력이 오는지는 확인하지 못합니다. 그래서 여기서 성공해도 ‘조건부 지원’까지만 기록합니다.",
+            Text("화면이 꺼져 있거나 다른 앱이 앞에 있을 때, Spotify가 미디어 세션을 쥐고 있을 때도 같은 입력이 오는지는 확인하지 못합니다. 차량 Bluetooth 버튼은 이 경로를 거치지 않을 수 있어 여기서 판정할 수 없습니다. 좋아요·싫어요는 제스처 인식만 확인한 것이고, 실제 곡에 평가가 붙는지는 확인하지 않았습니다. 그래서 여기서 성공해도 ‘조건부 지원’까지만 기록합니다.",
                 fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
         }
     }
@@ -182,24 +188,82 @@ private val DIAGNOSTIC_KEYS = mapOf(
 )
 
 /**
+ * A stand-in target for the rating gestures.
+ *
+ * The reducer discards RATE_UP/RATE_DOWN with NO_TARGET_TRACK when there is no snapshot, so
+ * feeding null meant SC03 and SC04 could never confirm however cleanly the buttons arrived, and
+ * the screen then offered to save UNSUPPORTED. What this diagnostic is asking is whether the
+ * gesture is recognised, not whether a real track was rated, so it supplies a target and the
+ * screen says out loud that the target is synthetic.
+ */
+private fun diagnosticSnapshot(observedAtElapsed: Long) = TrackSnapshot(
+    provider = "diagnostic",
+    trackId = "diagnostic-target",
+    mediaSessionEpoch = 1,
+    observedAtElapsed = observedAtElapsed,
+    playbackRevision = 1,
+    isSupportedContent = true
+)
+
+/**
  * Replays the captured events through the real reducer with every mapping switched on, so the
  * screen reports what the shipped logic would decide rather than a second implementation of it.
+ *
+ * The scheduled timeouts are replayed too. Without them a lone short press left a double-tap
+ * candidate standing forever and the next long press came out as LONG_SECOND_PRESS — a verdict
+ * the real coordinator, which does fire the timer, would never reach.
  */
 private fun replay(raw: List<RawKey>): Map<Shortcut, DiagnosticRun> {
     val reducer = SteeringGestureReducer()
     var state = SteeringState.initial(Shortcut.entries.toSet())
     val runs = Shortcut.entries.associateWith { DiagnosticRun(it) }.toMutableMap()
-    var pressesFor: SteeringKey? = null
+    val timers = mutableListOf<Pair<String, Long>>()
+    var inFlight: SteeringKey? = null
+
+    fun record(shortcut: Shortcut, change: (DiagnosticRun) -> DiagnosticRun) {
+        runs[shortcut] = change(runs.getValue(shortcut))
+    }
+
+    // An attempt is counted where the reducer reaches a verdict, not on every press. Counting on
+    // the press charged one PLAY_PAUSE tap to SC03 and SC04 both, so a working double tap read as
+    // one confirmation out of two attempts and SC04 as a silent failure.
+    fun step(result: SteeringResult, attributeTo: SteeringKey?) {
+        state = result.state
+        result.effects.forEach { effect ->
+            when (effect) {
+                is SteeringEffect.Emit -> Shortcut.entries
+                    .firstOrNull { it.action == effect.command.action }
+                    ?.let { s -> record(s) { it.copy(attempts = it.attempts + 1, gesturesConfirmed = it.gesturesConfirmed + 1) } }
+                is SteeringEffect.Discard -> {
+                    // A discard naming a shortcut is a verdict on that mapping. One that names
+                    // none abandoned the press itself, which was an attempt at every mapping on
+                    // that key.
+                    val targets = effect.shortcut?.let { listOf(it) }
+                        ?: attributeTo?.let { k -> Shortcut.entries.filter { it.key == k } }.orEmpty()
+                    targets.forEach { s -> record(s) { it.copy(attempts = it.attempts + 1, discards = it.discards + effect.reason) } }
+                }
+                is SteeringEffect.DispatchBase -> Shortcut.entries.filter { it.key == effect.key }
+                    .forEach { s -> record(s) { it.copy(baseDispatches = it.baseDispatches + 1) } }
+                is SteeringEffect.ScheduleTimeout -> timers += effect.token to effect.atElapsed
+            }
+        }
+    }
+
+    fun drain(until: Long) {
+        while (true) {
+            val due = timers.filter { it.second <= until }.minByOrNull { it.second } ?: return
+            timers -= due
+            step(reducer.reduce(state, SteeringEvent.Timeout(due.first, due.second)), inFlight)
+            // A stuck press expiring ends the press, so the next DOWN is not about it any more.
+            if (state.idle) inFlight = null
+        }
+    }
 
     raw.forEach { key ->
         val mapped = DIAGNOSTIC_KEYS[key.keyCode] ?: return@forEach
-        if (key.isDown && key.repeatCount == 0) {
-            pressesFor = mapped
-            // One attempt per press, counted against whichever mappings use that key.
-            Shortcut.entries.filter { it.key == mapped }.forEach { s ->
-                runs[s] = runs.getValue(s).let { it.copy(attempts = it.attempts + 1) }
-            }
-        }
+        drain(key.eventTime)
+        // A discard raised while a DOWN is being processed is usually about the press it replaced.
+        val attributeTo = if (key.isDown) inFlight ?: mapped else mapped
         val input = SteeringInput(
             eventId = "${key.deviceId}:${key.downTime}:${key.eventTime}:${key.isDown}",
             inputSourceId = key.deviceName,
@@ -215,23 +279,12 @@ private fun replay(raw: List<RawKey>): Map<Shortcut, DiagnosticRun> {
             canceled = key.canceled,
             baseHandlingOwner = BaseHandlingOwner.UNKNOWN
         )
-        val result = reducer.reduce(state, SteeringEvent.Key(input, null))
-        state = result.state
-        result.effects.forEach { effect ->
-            when (effect) {
-                is SteeringEffect.Emit -> Shortcut.entries
-                    .firstOrNull { it.action == effect.command.action }
-                    ?.let { s -> runs[s] = runs.getValue(s).let { it.copy(gesturesConfirmed = it.gesturesConfirmed + 1) } }
-                is SteeringEffect.Discard -> {
-                    val target = effect.shortcut ?: pressesFor?.let { k -> Shortcut.entries.firstOrNull { it.key == k } }
-                    target?.let { s -> runs[s] = runs.getValue(s).let { it.copy(discards = it.discards + effect.reason) } }
-                }
-                is SteeringEffect.DispatchBase -> Shortcut.entries.filter { it.key == effect.key }.forEach { s ->
-                    runs[s] = runs.getValue(s).let { it.copy(baseDispatches = it.baseDispatches + 1) }
-                }
-                is SteeringEffect.ScheduleTimeout -> Unit
-            }
-        }
+        // Observed at the press, so the target is never stale against the DOWN that took it.
+        val snapshot = diagnosticSnapshot(if (key.isDown) key.downTime else key.eventTime)
+        step(reducer.reduce(state, SteeringEvent.Key(input, snapshot)), attributeTo)
+        inFlight = if (key.isDown) mapped else null
     }
+    // Anything still pending resolves the way it would have a moment later.
+    drain(Long.MAX_VALUE)
     return runs
 }

@@ -36,6 +36,37 @@ class SteeringGestureReducerTest {
     }
 
     private fun key(i: SteeringInput, snap: TrackSnapshot? = track(at = i.eventTimeElapsed)) = SteeringEvent.Key(i, snap)
+
+    /**
+     * Runs the events the way the coordinator would: every timer the reducer asks for comes back
+     * as a Timeout on the same queue, in time order.
+     *
+     * [run] never delivers the timers, so no test using it can see an expiry at all — which is
+     * exactly how a double tap whose second press outlived its own tap timer got through.
+     */
+    private fun runQueued(vararg events: SteeringEvent, enabled: Set<Shortcut> = all): Pair<SteeringState, List<SteeringEffect>> {
+        var state = SteeringState.initial(enabled)
+        val effects = mutableListOf<SteeringEffect>()
+        val timers = mutableListOf<Pair<String, Long>>()
+        fun step(r: SteeringResult) {
+            state = r.state
+            effects += r.effects
+            r.effects.filterIsInstance<SteeringEffect.ScheduleTimeout>().forEach { timers += it.token to it.atElapsed }
+        }
+        fun drain(until: Long) {
+            while (true) {
+                val due = timers.filter { it.second <= until }.minByOrNull { it.second } ?: return
+                timers -= due
+                step(reducer.reduce(state, SteeringEvent.Timeout(due.first, due.second)))
+            }
+        }
+        events.forEach { e ->
+            if (e is SteeringEvent.Key) drain(e.input.eventTimeElapsed)
+            step(reducer.reduce(state, e))
+        }
+        drain(Long.MAX_VALUE)
+        return state to effects
+    }
     private fun List<SteeringEffect>.commands() = filterIsInstance<SteeringEffect.Emit>().map { it.command }
     private fun List<SteeringEffect>.bases() = filterIsInstance<SteeringEffect.DispatchBase>()
     private fun List<SteeringEffect>.discards() = filterIsInstance<SteeringEffect.Discard>().map { it.reason }
@@ -139,11 +170,34 @@ class SteeringGestureReducerTest {
         key(input(SteeringKey.PLAY_PAUSE, KeyAction.UP, downAt, at = downAt + held), track(trackId, downAt + held)))
 
     @Test fun theDoubleTapGapIsExact() {
-        val inGap = run(*(tap(0) + tap(100 + t.doubleTapGapMs)).toTypedArray()).second
+        // Queued, so the tap timer competes with the second press instead of being ignored.
+        val inGap = runQueued(*(tap(0) + tap(100 + t.doubleTapGapMs)).toTypedArray()).second
         assertEquals(listOf(ShortcutAction.RATE_UP), inGap.commands().map { it.action })
 
-        val past = run(*(tap(0) + tap(100 + t.doubleTapGapMs + 1)).toTypedArray()).second
+        val past = runQueued(*(tap(0) + tap(100 + t.doubleTapGapMs + 1)).toTypedArray()).second
         assertTrue(past.commands().isEmpty())
+    }
+
+    @Test fun aDoubleTapSurvivesItsOwnTimerFiringWhileTheSecondPressIsStillDown() {
+        // Down 300ms after the release and held 100ms: inside the gap, but the release lands at
+        // 400 — past the 351 timer. Expiring on the timer alone turned this into two first taps.
+        val (state, fx) = runQueued(
+            key(input(SteeringKey.PLAY_PAUSE, KeyAction.DOWN, 0), track("t1", 0)),
+            key(input(SteeringKey.PLAY_PAUSE, KeyAction.UP, 0, at = 100), track("t1", 100)),
+            key(input(SteeringKey.PLAY_PAUSE, KeyAction.DOWN, 400), track("t1", 400)),
+            key(input(SteeringKey.PLAY_PAUSE, KeyAction.UP, 400, at = 500), track("t1", 500)))
+        assertEquals(listOf(ShortcutAction.RATE_UP), fx.commands().map { it.action })
+        assertTrue(state.idle)
+    }
+
+    @Test fun anUnpairedTapExpiresInsteadOfHauntingTheNextPress() {
+        val (state, fx) = runQueued(
+            *tap(0).toTypedArray(),
+            key(input(SteeringKey.PLAY_PAUSE, KeyAction.DOWN, 2_000), track("t1", 2_000)),
+            key(input(SteeringKey.PLAY_PAUSE, KeyAction.UP, 2_000, at = 3_000), track("t1", 3_000)))
+        assertEquals(listOf(ShortcutAction.RATE_DOWN), fx.commands().map { it.action })
+        assertFalse(DiscardReason.LONG_SECOND_PRESS in fx.discards())
+        assertTrue(state.idle)
     }
 
     @Test fun aLongSecondPressIsADislikeAndNotALike() {

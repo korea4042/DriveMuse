@@ -97,6 +97,23 @@ class Preferences(private val context: Context) {
     } }
     suspend fun flag(key: String, value: Boolean) { context.driveStore.edit { it[booleanPreferencesKey(key)] = value } }
     suspend fun string(key: String, value: String) { context.driveStore.edit { it[stringPreferencesKey(key)] = value } }
+    /**
+     * Read-modify-write inside one edit block, for the encoded record lists.
+     *
+     * Reading a StateFlow snapshot, editing it and writing the whole string back loses records:
+     * two saves that touch different records overlap and the later one writes a list built before
+     * the earlier one landed. DataStore serialises edit blocks, so merging in here closes it
+     * structurally rather than by timing. Returns what was written.
+     */
+    suspend fun merge(key: String, transform: (String) -> String): String {
+        var written = ""
+        context.driveStore.edit { p ->
+            val k = stringPreferencesKey(key)
+            written = transform(p[k] ?: "")
+            p[k] = written
+        }
+        return written
+    }
     suspend fun long(key: String, value: Long) { context.driveStore.edit { it[longPreferencesKey(key)] = value } }
     suspend fun ratio(value: Float) { context.driveStore.edit { it[floatPreferencesKey("ratio")] = value.coerceIn(0f,1f) } }
     suspend fun suspendUntil(value: Long) { context.driveStore.edit { it[longPreferencesKey("suspended")] = value } }

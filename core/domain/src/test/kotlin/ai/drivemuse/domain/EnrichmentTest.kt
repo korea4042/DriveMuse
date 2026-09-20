@@ -76,6 +76,17 @@ class EnrichmentTest {
         assertEquals(Mood.CALM, TrackFeatureResolver.resolve(listOf(assertion("mood", "CALM", Basis.AI_INFERRED, AssertionSource.GEMINI, .45))).mood?.value)
     }
 
+    @Test fun aTagOrInferenceWithNoStatedConfidenceDoesNotPassTheFloor() {
+        // It used to read as 1.0, so an inference that said nothing about its own strength cleared
+        // the floor and then showed on screen as certain.
+        assertNull(TrackFeatureResolver.resolve(listOf(assertion("mood", "CALM", Basis.AI_INFERRED, AssertionSource.GEMINI))).mood)
+        assertNull(TrackFeatureResolver.resolve(listOf(assertion("energy", "0.25", Basis.COMMUNITY_TAG))).energy)
+        // A fact has no floor to clear, so a missing confidence still reads as full.
+        val fact = TrackFeatureResolver.resolve(listOf(assertion("energy", "0.25", Basis.PROVIDER_FACT, AssertionSource.MUSICBRAINZ)))
+        assertEquals(.25, fact.energy?.value)
+        assertEquals(1.0, fact.energy?.confidence)
+    }
+
     @Test fun anExpiredAssertionIsNotRead() {
         val expired = assertion("energy", "0.25", Basis.COMMUNITY_TAG, confidence = .65).copy(expiresAt = 100)
         assertNull(TrackFeatureResolver.resolve(listOf(expired), now = 200).energy)

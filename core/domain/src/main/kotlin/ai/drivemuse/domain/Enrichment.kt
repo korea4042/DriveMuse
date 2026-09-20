@@ -182,9 +182,20 @@ object TrackFeatureResolver {
         else -> 0.0
     }
 
+    /**
+     * §27: a tag or an inference is a claim with a stated strength, and one that states none has
+     * nothing to put against the floor. Treating a missing confidence as 1.0 let those through and
+     * then showed them as certain. A fact has no floor, so its missing confidence still reads full.
+     */
+    private fun passesFloor(a: CandidateAssertion): Boolean {
+        val floor = floor(a.basis)
+        if (floor <= 0.0) return true
+        return (a.confidence ?: return false) >= floor
+    }
+
     /** Best claim for one field, or null. Ties inside a basis go to the later metadataVersion. */
     private fun best(assertions: List<CandidateAssertion>, field: String, now: Long): CandidateAssertion? =
-        assertions.filter { it.field == field && it.live(now) && (it.confidence ?: 1.0) >= floor(it.basis) }
+        assertions.filter { it.field == field && it.live(now) && passesFloor(it) }
             .minWithOrNull(compareBy<CandidateAssertion> { rank(it.basis) }.thenByDescending { it.metadataVersion }.thenByDescending { it.fetchedAt })
 
     private fun <T> feature(a: CandidateAssertion?, parse: (String) -> T?): Feature<T>? {

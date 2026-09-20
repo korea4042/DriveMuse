@@ -911,10 +911,13 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if (ui.value.driving) { message("정차 후 저장해 주세요"); return }
         operations.start(OperationKind.SAVE,OperationRegistry.capability(record.shortcut.name),
             retry = { saveCapability(record) }) { op ->
-            val intended = capabilities.value.filterNot {
-                it.vehicleId == record.vehicleId && it.transport == record.transport && it.shortcut == record.shortcut
-            } + record
-            prefs.string("steeringCapabilities",CapabilityCodec.encode(intended))
+            // Merged inside the edit, not from the flow snapshot: two mappings saved in quick
+            // succession from the diagnostic screen would otherwise drop one another's record.
+            prefs.merge("steeringCapabilities") { raw ->
+                CapabilityCodec.encode(CapabilityCodec.decode(raw).filterNot {
+                    it.vehicleId == record.vehicleId && it.transport == record.transport && it.shortcut == record.shortcut
+                } + record)
+            }
             val readBack = CapabilityCodec.decode(prefs.flow.first().steeringJson)
             if (readBack.none { it == record }) error("결과를 저장하지 못했어요 · 다시 시도해 주세요")
             op.confirm("${record.shortcut.label} · ${record.capability.label}")
@@ -933,8 +936,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         operations.start(OperationKind.SAVE,OperationRegistry.schedule(schedule.direction.name),
             retry = { saveSchedule(schedule) }) { op ->
             val intended = schedule.copy(revision = schedule.revision + 1)
-            val next = schedules.value.filterNot { it.id == intended.id } + intended
-            prefs.string("commuteSchedules",CommuteCodec.encode(next))
+            // Same reason as saveCapability: merge against what is on disk at write time, so a
+            // concurrent save of the other direction is not erased by this one's stale snapshot.
+            prefs.merge("commuteSchedules") { raw ->
+                CommuteCodec.encode(CommuteCodec.decode(raw).filterNot { it.id == intended.id } + intended)
+            }
             // The evidence is the record on disk equalling what was meant to be written. Checking
             // only that the id came back would confirm a save that changed nothing.
             val readBack = CommuteCodec.decode(prefs.flow.first().commuteJson)
@@ -950,12 +956,13 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if (ui.value.driving) { message("정차 후 설정해 주세요"); return }
         operations.start(OperationKind.SAVE,OperationRegistry.schedule(direction.name),
             retry = { deleteSchedule(direction, id) }) { op ->
-            val intended = schedules.value.filterNot { it.id == id }
-            prefs.string("commuteSchedules",CommuteCodec.encode(intended))
-            // Same standard as saving: the list on disk has to be the list that was meant, not
-            // merely a list that came back.
+            prefs.merge("commuteSchedules") { raw ->
+                CommuteCodec.encode(CommuteCodec.decode(raw).filterNot { it.id == id })
+            }
+            // The property a delete has to prove is that this record is gone. Whole-list equality
+            // would now fail whenever another save legitimately landed alongside it.
             val readBack = CommuteCodec.decode(prefs.flow.first().commuteJson)
-            if (readBack != intended) error("일정을 삭제하지 못했어요 · 다시 시도해 주세요")
+            if (readBack.any { it.id == id }) error("일정을 삭제하지 못했어요 · 다시 시도해 주세요")
             contextVersion++
             classifyNow(scheduleList = readBack)
             op.confirm("${direction.label} 일정을 삭제했어요")
