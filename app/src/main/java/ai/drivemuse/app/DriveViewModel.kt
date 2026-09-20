@@ -26,9 +26,22 @@ data class UiState(
     val driving: Boolean = false, val pendingRule: MusicRule? = null,
     val connection: String = "미연결", val reason: String = "좋아하는 음악과 새로운 발견 사이",
     val engineLabel: String = "초기 취향 · Spotify 재생", val weatherLabel: String = "날씨 정보 없음", val consent: android.app.PendingIntent? = null,
-    /** §7 QUE01: the conditions moved under a list the user can still see and still play. */
-    val queueStale: Boolean = false
-)
+    /**
+     * §7 QUE01, FIX-B: why the list no longer matches its conditions. A set rather than a flag,
+     * because a recovery from an off-plan recording must not also clear an outstanding rule change.
+     */
+    val stale: Set<StaleReason> = emptySet()
+) {
+    /** Re-selection fixes conditions that moved; it does not fix a queue awaiting verification. */
+    val needsReselect get() = stale.any { !it.clearedByConfirmedPlayback }
+    val staleLabel get() = when {
+        needsReselect -> "조건이 바뀌었어요 · 다시 고르기"
+        StaleReason.CONTROL_LOST in stale -> "다른 곡이 재생됐어요 · 목록에서 다시 선택"
+        StaleReason.DELIVERY_UNCERTAIN in stale -> "대기 곡 전달 결과를 확인하지 못했어요"
+        StaleReason.RESTORE_UNVERIFIED in stale -> "저장된 목록 · 재생하면 이어집니다"
+        else -> null
+    }
+}
 class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val prefs = Preferences(application)
     private val db=DriveDatabase.get(application)
@@ -63,6 +76,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * was shown is what makes a re-roll actually roll.
      */
     private val offered=java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    /** FIX-B: every loss of control advances it, so a callback from before cannot clear one after. */
+    private val controlEpoch=ControlEpoch()
     private suspend fun touchSession() {
         val previous=sessionId
         runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } }
@@ -113,12 +128,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             dao.prune(System.currentTimeMillis()-2592000000L);learning.prune(System.currentTimeMillis())
             refreshListening()
             val d=surveyStore.load();draftMutable.value=d
-            if(d.completed) { val restored=coordinator.restore(d.revision);mutable.update { it.copy(queue=restored,engineLabel="저장된 추천 · Spotify 재생") } }
+            if(d.completed) { val restored=coordinator.restore(d.revision);mutable.update { it.copy(queue=restored,stale=if(restored.isEmpty()) it.stale else it.stale+StaleReason.RESTORE_UNVERIFIED,engineLabel="저장된 추천 · Spotify 재생") } }
         }
     }
     private fun changeSurvey(transform: (SurveyDraft)->SurveyDraft) {
         if(ui.value.driving) return
-        cancelSelection();surveyJob?.cancel();engine.clearCache();markQueueStale()
+        cancelSelection();surveyJob?.cancel();engine.clearCache();markQueueStale(StaleReason.PROFILE_CHANGED)
         edits.trySend { coordinator.invalidate();val d=draftMutable.value?:surveyStore.load();draftMutable.value=surveyStore.save(transform(d)) }
     }
     fun surveyAnswer(a: SurveyAnswer)=changeSurvey { it.copy(answers=it.answers.filter { old -> old.question.id!=a.question.id }+a) }
@@ -228,7 +243,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         val current = runtime.spotifyRemote.state.value?.trackId
         val index = queue.indexOfFirst { it.id == current }
         when {
-            ui.value.queueStale ->
+            // Only reasons a confirmed playback cannot clear block the next button. A queue merely
+            // waiting to be re-verified is unblocked by playing from it, which is what this does.
+            ui.value.stale.any { !it.clearedByConfirmedPlayback } ->
                 message("목록이 현재 조건과 달라요. 다시 선곡한 뒤 이어서 들어 주세요")
             settings.value.controlLost ->
                 message("자동 선곡이 멈춘 상태예요. 목록에서 곡을 선택하면 다시 시작합니다")
@@ -252,7 +269,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun demo(value: Boolean) { cancelSelection();progress=DiscoveryProgress(); mutable.update { it.copy(demo=value,queue=emptyList(),connection=if(value) "데모 · 계정 미연결" else connectionLabel(settings.value)) } }
     fun driving(value: Boolean) { if(value) { cancelSelection();contextJob?.cancel() }; mutable.update { it.copy(driving=value,page="홈") } }
     fun auto(value: Boolean) { if (ui.value.driving) return; viewModelScope.launch { prefs.flag("auto",value) } }
-    fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();markQueueStale();viewModelScope.launch { coordinator.invalidate();prefs.ratio(value) } }
+    fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();markQueueStale(StaleReason.RULE_CHANGED);viewModelScope.launch { coordinator.invalidate();prefs.ratio(value) } }
     fun choose(context: DriveContext) { if (ui.value.driving) return; suspendAgent();contextVersion++;mutable.update { it.copy(context=context) }; recommend() }
 
     /** §8.5 — sign-in never appears while driving; Spotify consent runs in the browser when parked. */
@@ -384,7 +401,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 // rule has nothing to act on. Dropping it silently would misreport the user's own
                 // rule as applied.
                 val energyRuleUnapplied=direct!=null && effective.energyCeiling<1.0
-                mutable.update { it.copy(queue=if(append) carried+queue else queue,queueStale=false,engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
+                mutable.update { it.copy(queue=if(append) carried+queue else queue,stale=emptySet(),engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
                 // Say the pool is short rather than padding it out of the scored ranking.
                 if(shortfall!=null && !append) message("조건을 통과한 후보가 ${shortfall.eligible}곡이라 ${queue.size}곡만 준비했어요. 제외 조건을 확인하거나 후보를 더 불러와 주세요")
@@ -437,8 +454,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * marked, not cleared: playing a track from it is still allowed and still checks exclusions,
      * and a failed re-selection leaves the user with the list they had.
      */
-    private fun markQueueStale() { if(ui.value.queue.isNotEmpty()) mutable.update { it.copy(queueStale=true) } }
-    fun suspendAgent() { cancelSelection(); viewModelScope.launch { coordinator.invalidate();observer.release();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
+    private fun markQueueStale(reason: StaleReason) { if(ui.value.queue.isNotEmpty()) mutable.update { it.copy(stale=it.stale+reason) } }
+    fun suspendAgent() { cancelSelection(); controlEpoch.advance(); viewModelScope.launch { coordinator.invalidate();observer.release();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
 
     /**
      * R09, §7. Something the app did not queue is playing. The app stands down rather than trying
@@ -455,8 +472,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         coordinator.invalidate()
         // No expiry. Waiting out a clock is not consent, so the flag is cleared by an explicit
         // request to play or by a new drive session, never by time passing.
+        controlEpoch.advance()
         prefs.flag("controlLost", true)
-        mutable.update { it.copy(queueStale=true) }
+        mutable.update { it.copy(stale=it.stale+StaleReason.CONTROL_LOST) }
         message("목록에 없는 곡이 재생돼 자동 선곡을 멈췄어요. 목록에서 곡을 선택하면 다시 시작합니다")
     }
 
@@ -465,10 +483,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * the start failed or its result was unclear, the app does not know what is in the queue and
      * has no business filling it.
      */
-    private suspend fun regainControl() {
+    private suspend fun regainControl(capturedEpoch: Long) {
+        // FIX-B: a start confirmed after a fresh intervention is confirming the wrong world. The
+        // late callback is ignored rather than allowed to hand the queue back.
+        if (!controlEpoch.stillCurrent(capturedEpoch)) return
         // Read the store rather than the StateFlow: this runs during init, before the flow has
         // necessarily emitted, and a stale `false` there would silently keep the stop in place.
         if (runCatching { prefs.flow.first().controlLost }.getOrDefault(false)) prefs.flag("controlLost", false)
+        mutable.update { it.copy(stale=it.stale.filterNot { r -> r.clearedByConfirmedPlayback }.toSet()) }
     }
 
     /** One in-flight playback request at a time: a double tap must not queue the batch twice (QUE02). */
@@ -493,7 +515,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      */
     private fun launchPlayback(track: Track, markSkip: Boolean) {
         val batch = ui.value.queue
-        val following = batch.dropWhile { it.id != track.id }.drop(1).filter { it.id != track.id }.distinctBy { it.id }
+        // FIX-B: the rules may have moved while control was lost, so what follows is re-checked
+        // here rather than trusted because it was valid when the batch was built. Both entry
+        // points go through this same check.
+        val constraints = Constraints(excludedGenres = profile().exclusions)
+        val planned = batch.dropWhile { it.id != track.id }.drop(1).filter { it.id != track.id }.distinctBy { it.id }
+        val following = planned.filter { constraints.allows(it) }
+        val dropped = planned.size - following.size
+        val capturedEpoch = controlEpoch.current
         playbackJob = viewModelScope.launch {
           // A hard ceiling on the whole request: nothing here may leave the button locked.
           val finished = kotlinx.coroutines.withTimeoutOrNull(60_000) {
@@ -533,12 +562,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
                 is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
             }
+            if (unclear > 0) mutable.update { it.copy(stale=it.stale+StaleReason.DELIVERY_UNCERTAIN) }
             // R09: the request was not the recovery. A confirmed start of the intended recording
             // is. On failure or an unclear result the app stays out of the queue.
-            regainControl()
+            regainControl(capturedEpoch)
             refreshListening()
             message("${track.artist} ${track.title} 재생 시작" +
-                (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기" + (if (unclear > 0) " · ${unclear}곡 결과 불명" else "")))
+                (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기" + (if (unclear > 0) " · ${unclear}곡 결과 불명" else "")) +
+                (if (dropped > 0) " · 조건에 맞지 않는 ${dropped}곡은 보내지 않았어요" else ""))
             true
           }
           if (finished == null) message("재생 요청이 60초 안에 끝나지 않아 중단했어요. Spotify 앱 상태를 확인해 주세요")
@@ -551,9 +582,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if (parsed==null) message("‘퇴근길/출근길/여행/야간’, ‘잔잔하게·신나게’, ‘새 노래 30%’ 중 하나는 포함해 주세요")
         else mutable.update { it.copy(pendingRule=parsed) }
     }
-    fun confirmRule(save: Boolean) { if(save) { cancelSelection();markQueueStale() }; val r=ui.value.pendingRule; mutable.update { it.copy(pendingRule=null) }; if(save && r!=null && !ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(RuleEntity.from(r)) } }
-    fun deleteRule(id: String) { cancelSelection();markQueueStale(); if (!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.deleteRule(id) } }
-    fun toggleRule(rule: RuleEntity) { cancelSelection();markQueueStale(); if(!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(rule.copy(enabled=!rule.enabled)) } }
+    fun confirmRule(save: Boolean) { if(save) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED) }; val r=ui.value.pendingRule; mutable.update { it.copy(pendingRule=null) }; if(save && r!=null && !ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(RuleEntity.from(r)) } }
+    fun deleteRule(id: String) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED); if (!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.deleteRule(id) } }
+    fun toggleRule(rule: RuleEntity) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED); if(!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(rule.copy(enabled=!rule.enabled)) } }
     fun feedback(id: String, feedback: String) { if(!ui.value.driving) viewModelScope.launch { dao.feedback(id,feedback) } }
     fun registerVehicle(id: String,name: String) { if(ui.value.driving) return; viewModelScope.launch { prefs.string("vehicleId",id); prefs.string("vehicleName",name); prefs.flag("connected",false); message("차량을 등록했습니다. 다음 연결부터 감지합니다") } }
     fun classifyNow() {
