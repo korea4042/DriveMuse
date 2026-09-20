@@ -17,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalTime
 import java.time.ZonedDateTime
 import java.util.UUID
@@ -97,7 +98,17 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val weather=WeatherRepository()
     private var region: Region?=null
     private var weatherFact: WeatherFact?=null
-    /** §7: null until a fix has been attempted at all. */
+    /**
+     * Serialises every path that takes a fix and a forecast. Launch, departure and the button can
+     * overlap, and WeatherRepository stamps its throttle *before* the network call, so a second
+     * caller arriving mid-flight is handed the still-empty cache and writes null over the fact the
+     * first one is about to store. In line, the second caller gets the first one's result instead.
+     */
+    private val contextSync=kotlinx.coroutines.sync.Mutex()
+    /**
+     * §7: null until the app has either attempted a fix or established that it may not. Launch
+     * sets PERMISSION_DENIED without attempting, so the settings screen can say why at once.
+     */
     private val locationStatusMutable=MutableStateFlow<LocationStatus?>(null)
     val locationStatus=locationStatusMutable.asStateFlow()
     private var contextVersion=0L
@@ -215,8 +226,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 if (!connected) return@collectLatest
                 while (true) {
                     kotlinx.coroutines.delay(ContextFreshness.CONTEXT_REFRESH_MS)
-                    if (!location.permitted()) return@collectLatest
-                    syncContextQuietly()
+                    // Skipped, not ended: a permission granted back mid-drive resumes on the next tick.
+                    if (location.permitted()) syncContextQuietly()
                 }
             }
         }
@@ -271,12 +282,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // The repository serves its cache while the five-minute throttle holds, and that cache
             // is identical to a fresh answer in every field but this one.
             val fetchedBefore=weatherFact?.fetchedAt
-            val outcome=location.refresh()
-            region=outcome.region ?: location.lastKnown()
-            // A failed fix does not invalidate a forecast already held for the same region: the
-            // two have separate lifetimes (§4). Only a region we actually have can be looked up.
-            op.stage(OperationStage.PREPARING)
-            outcome.region?.let { weatherFact=weather.get(it) }
+            val outcome=contextSync.withLock {
+                val outcome=location.refresh()
+                region=outcome.region ?: location.lastKnown()
+                // A failed fix does not invalidate a forecast already held for the same region: the
+                // two have separate lifetimes (§4). Only a region we actually have can be looked up.
+                op.stage(OperationStage.PREPARING)
+                outcome.region?.let { weatherFact=weather.get(it) }
+                outcome
+            }
             locationStatusMutable.value=outcome.status
             contextVersion++
             cancelSelection();coordinator.invalidate()
@@ -321,7 +335,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * @param known a fix the caller already took, so the departure capture does not pay for a
      *   second position request to get the forecast that belongs with it.
      */
-    private suspend fun syncContextQuietly(known: Region? = null) {
+    private suspend fun syncContextQuietly(known: Region? = null) = contextSync.withLock {
         val fixed = known ?: location.refresh().let { outcome ->
             locationStatusMutable.value = outcome.status
             outcome.region ?: location.lastKnown()
@@ -931,7 +945,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // unplugged during it, and writing then would clear the end time and resurrect the
             // finished episode.
             val current = prefs.flow.first()
-            when (val decision = DepartureGate.decide(startedAt,now,current.connected,current.departureAt,current.departureEndedAt,offered)) {
+            val decision = DepartureGate.decide(startedAt,now,current.connected,current.departureAt,current.departureEndedAt,offered)
+            when (decision) {
                 is DepartureDecision.Adopt -> {
                     prefs.departure(startedAt,decision.zone.name,0)
                     region = outcome.region
@@ -957,8 +972,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             }
             // The fix is in hand, so the forecast that belongs with it costs no second position
             // request. Taken after the departure verdict rather than before it, so a slow weather
-            // lookup cannot delay the message saying where the drive started.
-            (outcome.region ?: region)?.let { viewModelScope.launch { syncContextQuietly(known = it) } }
+            // lookup cannot delay the message saying where the drive started. Not for a departure
+            // that was thrown away because the car had already disconnected.
+            if (decision != DepartureDecision.Superseded)
+                (outcome.region ?: region)?.let { viewModelScope.launch { syncContextQuietly(known = it) } }
         }
     }
 
