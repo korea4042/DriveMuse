@@ -52,3 +52,36 @@ class ControlEpoch {
     /** True when nothing has intervened since [captured]. */
     fun stillCurrent(captured: Long) = captured == value
 }
+
+/**
+ * Which queued slots the app cannot account for.
+ *
+ * A queue command that comes back Unknown may or may not have landed, and Spotify offers no way to
+ * read back what it did with it. The only evidence is the recording itself being observed playing.
+ *
+ * Per slot, deliberately. An earlier version cleared the whole uncertainty the moment any track
+ * past the first started, which proves one slot and says nothing about the rest — and a track the
+ * driver picked from the list would have cleared it too, having never come from the queue at all.
+ * Rebuilding the ledger on every dispatch is what keeps that case out: a manual play is a new
+ * dispatch, so it replaces the ledger rather than resolving the old one.
+ */
+class DeliveryLedger {
+    private val pending = LinkedHashSet<String>()
+
+    /** Replaces the ledger for a new dispatch. [uncertain] are the slots whose fate is unknown. */
+    fun dispatched(uncertain: Collection<String>) {
+        pending.clear()
+        pending += uncertain
+    }
+
+    /** Marks one slot as observed. Returns true when this was the last outstanding one. */
+    fun observed(trackId: String): Boolean {
+        if (!pending.remove(trackId)) return false
+        return pending.isEmpty()
+    }
+
+    fun clear() { pending.clear() }
+
+    val unresolved: Set<String> get() = pending.toSet()
+    val settled get() = pending.isEmpty()
+}
