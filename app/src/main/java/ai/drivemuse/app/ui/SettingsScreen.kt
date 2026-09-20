@@ -123,7 +123,7 @@ import java.time.format.DateTimeFormatter
         if (fields.isNotEmpty()) {
             val canSave = fields.filter { it.required }.all { !values[it.key].isNullOrBlank() }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            DriveButton(if (cfg.ready) "새 값으로 다시 확인" else "저장하고 연결 테스트", canSave && !busy) { cvm.saveIntegration(p, values.toMap()); values.keys.filter { k -> fields.first { it.key == k }.secret }.forEach { values[it] = "" } }
+            DriveButton(if (cfg.ready) "새 값으로 다시 확인" else "저장하고 연결 테스트", canSave, busy = busy) { cvm.saveIntegration(p, values.toMap()); values.keys.filter { k -> fields.first { it.key == k }.secret }.forEach { values[it] = "" } }
             if (cfg.ready || cfg.status == IntegrationStatus.ERROR) TextButton(onClick = { cvm.removeIntegration(p) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("이 연결 삭제") }
         }
     }
@@ -190,7 +190,7 @@ import java.time.format.DateTimeFormatter
             if (!driving) {
                 ToggleRow("자동 수집", "약 6시간마다, 배터리·저장 공간이 충분할 때", c.autoEnabled, cvm::setAutoCollect)
                 ToggleRow("Wi-Fi에서만", "모바일 데이터에서는 수집하지 않아요", c.unmeteredOnly, cvm::setUnmeteredOnly)
-                DriveButton("지금 후보 보충", busy == null) { cvm.topUpNow() }
+                DriveButton("지금 후보 보충", true, busy = busy != null) { cvm.topUpNow() }
             } else Text("정차 후 설정에서 바꿀 수 있어요.", fontSize = 14.sp, color = DriveColors.Muted)
         }
         GlassSurface {
@@ -239,8 +239,8 @@ import java.time.format.DateTimeFormatter
             Text("집 " + (if (Zone.HOME in zones) "등록됨" else "미등록") + " · 회사 " + (if (Zone.WORK in zones) "등록됨" else "미등록"),
                 fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             Text("등록한 중심점과 반경만 기기에 암호화 저장합니다. 이동 경로는 저장하지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
-            DriveButton(if (Zone.HOME in zones) "집 위치 다시 등록" else "현재 위치를 집으로 등록", !driving, onRegisterHome)
-            DriveButton(if (Zone.WORK in zones) "회사 위치 다시 등록" else "현재 위치를 회사로 등록", !driving, onRegisterWork)
+            DriveButton(if (Zone.HOME in zones) "집 위치 다시 등록" else "현재 위치를 집으로 등록", !driving, onClick = onRegisterHome)
+            DriveButton(if (Zone.WORK in zones) "회사 위치 다시 등록" else "현재 위치를 회사로 등록", !driving, onClick = onRegisterWork)
             Text("실내에서는 위치가 잡히지 않을 수 있어요. 창가나 실외에서 시도해 주세요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             if (!driving) TextButton(onClick = onDelete, modifier = Modifier.heightIn(min = 48.dp)) { Text("등록 장소 삭제") }
         }
