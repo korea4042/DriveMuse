@@ -23,17 +23,17 @@ Starting a Gradle Daemon (subsequent builds will be faster)
 > Task :app:parseDebugLocalResources
 > Task :core:designsystem:processDebugManifest
 > Task :core:designsystem:compileDebugLibraryResources
-> Task :core:designsystem:parseDebugLocalResources
 > Task :app:mergeDebugResources
 > Task :app:processDebugMainManifest
 > Task :app:processDebugManifest
-> Task :core:designsystem:checkKotlinGradlePluginConfigurationErrors SKIPPED
-> Task :core:designsystem:javaPreCompileDebug
 > Task :app:processDebugManifestForPackage
-> Task :app:preDebugUnitTestBuild UP-TO-DATE
+> Task :core:designsystem:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:designsystem:parseDebugLocalResources
+> Task :core:designsystem:javaPreCompileDebug
 > Task :core:designsystem:generateDebugRFile
-> Task :app:javaPreCompileDebugUnitTest
 > Task :app:javaPreCompileDebug
+> Task :app:preDebugUnitTestBuild UP-TO-DATE
+> Task :app:javaPreCompileDebugUnitTest
 > Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
 > Task :app:mergeDebugShaders
 > Task :app:compileDebugShaders NO-SOURCE
@@ -64,21 +64,21 @@ Starting a Gradle Daemon (subsequent builds will be faster)
 > Task :core:domain:compileJava NO-SOURCE
 > Task :core:domain:classes UP-TO-DATE
 > Task :core:domain:jar
+> Task :core:domain:compileTestKotlin
+> Task :core:domain:compileTestJava NO-SOURCE
+> Task :core:domain:testClasses UP-TO-DATE
 > Task :app:mergeLibDexDebug
 > Task :app:mergeExtDexDebug
+> Task :core:domain:test
 > Task :app:mergeDebugNativeLibs
 
 > Task :app:stripDebugDebugSymbols
 Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so, libdatastore_shared_counter.so.
 
-> Task :core:domain:compileTestKotlin
-> Task :core:domain:compileTestJava NO-SOURCE
-> Task :core:domain:testClasses UP-TO-DATE
-> Task :core:domain:test
 > Task :app:kspDebugKotlin
 
 > Task :app:compileDebugKotlin
-w: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/MainActivity.kt:151:352 'val Icons.Outlined.ArrowForward: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Outlined.ArrowForward.
+w: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/MainActivity.kt:153:352 'val Icons.Outlined.ArrowForward: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Outlined.ArrowForward.
 w: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/discovery/DiscoveryCoordinator.kt:33:26 'class YouTubeApi : Any' is deprecated. YouTube is no longer a music source (§8). Kept for the v2 candidate migration path only.
 w: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/integration/IntegrationConfigRepository.kt:129:51 'class YouTubeApi : Any' is deprecated. YouTube is no longer a music source (§8). Kept for the v2 candidate migration path only.
 w: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/app/ui/SettingsScreen.kt:118:35 'constructor(capitalization: KeyboardCapitalization = ..., autoCorrect: Boolean, keyboardType: KeyboardType = ..., imeAction: ImeAction = ..., platformImeOptions: PlatformImeOptions? = ..., showKeyboardOnFocus: Boolean? = ..., hintLocales: LocaleList? = ...): KeyboardOptions' is deprecated. Please use the new constructor that takes optional autoCorrectEnabled parameter.
@@ -89,8 +89,8 @@ w: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/a
 > Task :app:bundleDebugClassesToCompileJar
 > Task :app:dexBuilderDebug
 > Task :app:mergeDebugGlobalSynthetics
-> Task :app:kspDebugUnitTestKotlin
 > Task :app:mergeProjectDexDebug
+> Task :app:kspDebugUnitTestKotlin
 > Task :app:compileDebugUnitTestKotlin
 > Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
 > Task :app:processDebugUnitTestJavaRes
@@ -99,7 +99,7 @@ w: file:///home/runner/work/DriveMuse/DriveMuse/app/src/main/java/ai/drivemuse/a
 > Task :app:packageDebug
 > Task :app:createDebugApkListingFileRedirect
 > Task :app:assembleDebug
-gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_4-1789886073520.json
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_4-1789893086851.json
 
-BUILD SUCCESSFUL in 1m 29s
+BUILD SUCCESSFUL in 1m 44s
 68 actionable tasks: 68 executed
