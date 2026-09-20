@@ -22,6 +22,16 @@ object ContextFreshness {
     /** §5: a reconnection within ten minutes continues the same drive, departure point included. */
     const val SESSION_RESUME_MS = 600_000L
 
+    /**
+     * §4: how often the context is re-taken while the car is connected. A drive lasts longer than
+     * one observation, and the forecast taken at departure was the only one the whole way.
+     *
+     * The repository already holds a lookup to one per five minutes and a fact for fifteen, and
+     * the location adapter reuses a fix for two, so this is the cadence of the attempt, not of the
+     * network traffic.
+     */
+    const val CONTEXT_REFRESH_MS = 900_000L
+
     fun zoneUsable(measuredAt: Long, now: Long) = now - measuredAt in 0..FIX_FOR_ZONE_MS
     fun regionUsableForWeather(measuredAt: Long, now: Long) = now - measuredAt in 0..FIX_FOR_REGION_MS
 }

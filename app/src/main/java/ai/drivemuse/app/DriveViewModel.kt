@@ -17,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalTime
 import java.time.ZonedDateTime
 import java.util.UUID
@@ -97,7 +98,17 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val weather=WeatherRepository()
     private var region: Region?=null
     private var weatherFact: WeatherFact?=null
-    /** §7: null until a fix has been attempted at all. */
+    /**
+     * Serialises every path that takes a fix and a forecast. Launch, departure and the button can
+     * overlap, and WeatherRepository stamps its throttle *before* the network call, so a second
+     * caller arriving mid-flight is handed the still-empty cache and writes null over the fact the
+     * first one is about to store. In line, the second caller gets the first one's result instead.
+     */
+    private val contextSync=kotlinx.coroutines.sync.Mutex()
+    /**
+     * §7: null until the app has either attempted a fix or established that it may not. Launch
+     * sets PERMISSION_DENIED without attempting, so the settings screen can say why at once.
+     */
     private val locationStatusMutable=MutableStateFlow<LocationStatus?>(null)
     val locationStatus=locationStatusMutable.asStateFlow()
     private var contextVersion=0L
@@ -200,6 +211,27 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             }
         }
         viewModelScope.launch {
+            // §4: nothing fetched a position or a forecast on launch, so until the user went into
+            // settings and pressed the button the app held neither, and every first drive after a
+            // restart was selected with no weather at all. It never asks for the permission here:
+            // a system dialog is not what someone opening the app asked for.
+            if (location.permitted()) syncContextQuietly()
+            else locationStatusMutable.value = LocationStatus.PERMISSION_DENIED
+        }
+        viewModelScope.launch {
+            // §4: and again every fifteen minutes while the car is connected, because a drive
+            // outlasts one observation. collectLatest, so disconnecting ends the loop rather than
+            // leaving one running per connection.
+            settings.map { it.connected }.distinctUntilChanged().collectLatest { connected ->
+                if (!connected) return@collectLatest
+                while (true) {
+                    kotlinx.coroutines.delay(ContextFreshness.CONTEXT_REFRESH_MS)
+                    // Skipped, not ended: a permission granted back mid-drive resumes on the next tick.
+                    if (location.permitted()) syncContextQuietly()
+                }
+            }
+        }
+        viewModelScope.launch {
             operations.flow.collect { ops -> mutable.update { it.copy(working=ops.values.firstOrNull { o -> o.running }?.kind?.verb?.plus("…")) } }
         }
         viewModelScope.launch {
@@ -250,22 +282,20 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // The repository serves its cache while the five-minute throttle holds, and that cache
             // is identical to a fresh answer in every field but this one.
             val fetchedBefore=weatherFact?.fetchedAt
-            val outcome=location.refresh()
-            region=outcome.region ?: location.lastKnown()
-            // A failed fix does not invalidate a forecast already held for the same region: the
-            // two have separate lifetimes (§4). Only a region we actually have can be looked up.
-            op.stage(OperationStage.PREPARING)
-            outcome.region?.let { weatherFact=weather.get(it) }
+            val outcome=contextSync.withLock {
+                val outcome=location.refresh()
+                region=outcome.region ?: location.lastKnown()
+                // A failed fix does not invalidate a forecast already held for the same region: the
+                // two have separate lifetimes (§4). Only a region we actually have can be looked up.
+                op.stage(OperationStage.PREPARING)
+                outcome.region?.let { weatherFact=weather.get(it) }
+                outcome
+            }
             locationStatusMutable.value=outcome.status
             contextVersion++
             cancelSelection();coordinator.invalidate()
             val now=System.currentTimeMillis()
-            val fact=weatherFact?.takeIf { f -> region?.let { ContextFreshness.regionUsableForWeather(it.measuredAt,now) && f.usable(it.id,now) }==true }
-            fun clock(at: Long) = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0)
-            mutable.update { it.copy(
-                weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "${fact.source} · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"}${if(fact.stale(now)) " · 오래된 관측" else ""}",
-                weatherDetail=if(fact==null) "날씨 없음 · 지역 ${region?.id ?: "미확인"}"
-                    else "출처 ${fact.source} · 지역 ${fact.region} · 관측 ${clock(fact.observedAt)} · 조회 ${clock(fact.fetchedAt)} · ${if(fact.stale(now)) "오래된 관측" else "최신"}") }
+            val fact=describeWeather(now)
             val refresh=ContextRefresh.of(fact!=null,fact!=null && fact.fetchedAt!=fetchedBefore)
             // Only a position failure the app observed is named as the cause; a reuse caused by
             // the lookup throttle gets the plain sentence.
@@ -279,6 +309,53 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             }
         }
     }
+    /**
+     * Turns the held region and fact into the two lines the screen shows, and returns the fact if
+     * it is still usable. One place, so the button and the automatic paths cannot describe the
+     * same state differently.
+     */
+    private fun describeWeather(now: Long = System.currentTimeMillis()): WeatherFact? {
+        val fact=weatherFact?.takeIf { f -> region?.let { ContextFreshness.regionUsableForWeather(it.measuredAt,now) && f.usable(it.id,now) }==true }
+        fun clock(at: Long) = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0)
+        mutable.update { it.copy(
+            weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "${fact.source} · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"}${if(fact.stale(now)) " · 오래된 관측" else ""}",
+            weatherDetail=if(fact==null) "날씨 없음 · 지역 ${region?.id ?: "미확인"}"
+                else "출처 ${fact.source} · 지역 ${fact.region} · 관측 ${clock(fact.observedAt)} · 조회 ${clock(fact.fetchedAt)} · ${if(fact.stale(now)) "오래된 관측" else "최신"}") }
+        return fact
+    }
+
+    /**
+     * Position and forecast without touching the queue.
+     *
+     * [refreshWeather] is the button: it reports through an OperationState, cancels the selection
+     * and invalidates the coordinator. That is right for a deliberate press and wrong for anything
+     * that happens on its own — §4 is explicit that a context change never stops the song already
+     * playing. So the automatic paths share the fetch and none of the interruption.
+     *
+     * @param known a fix the caller already took, so the departure capture does not pay for a
+     *   second position request to get the forecast that belongs with it.
+     */
+    private suspend fun syncContextQuietly(known: Region? = null) = contextSync.withLock {
+        val fixed = known ?: location.refresh().let { outcome ->
+            val fallback = outcome.region ?: location.lastKnown()
+            // A tick in the background is usually refused a fresh fix: the app holds foreground-only
+            // location permission and runs no location service, so once the screen is off and
+            // Spotify is in front the OS answers with nothing. The last fix is still the region the
+            // forecast belongs to, and reporting TIMEOUT over a position the app is still using
+            // would have the settings screen say the location failed when nothing it shows has.
+            // A failure with nothing to fall back on is still reported, because then it is one.
+            if (outcome.available || fallback == null) locationStatusMutable.value = outcome.status
+            fallback
+        }
+        if (fixed != null) region = fixed
+        val before = weatherFact?.fetchedAt
+        region?.let { weatherFact = weather.get(it) }
+        val fact = describeWeather()
+        // Only a forecast that actually moved is a new context. A reuse served by the five-minute
+        // throttle would otherwise bump the revision on every tick and invalidate nothing useful.
+        if (fact != null && fact.fetchedAt != before) { contextVersion++; classifyNow() }
+    }
+
     /** Registered zones, so the screen shows whether saving actually worked (§24). */
     private val zonesMutable = MutableStateFlow(emptySet<Zone>())
     val registeredZones = zonesMutable.asStateFlow()
@@ -875,7 +952,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // unplugged during it, and writing then would clear the end time and resurrect the
             // finished episode.
             val current = prefs.flow.first()
-            when (val decision = DepartureGate.decide(startedAt,now,current.connected,current.departureAt,current.departureEndedAt,offered)) {
+            val decision = DepartureGate.decide(startedAt,now,current.connected,current.departureAt,current.departureEndedAt,offered)
+            when (decision) {
                 is DepartureDecision.Adopt -> {
                     prefs.departure(startedAt,decision.zone.name,0)
                     region = outcome.region
@@ -899,6 +977,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                         else decision.reason.detail)
                 }
             }
+            // The fix is in hand, so the forecast that belongs with it costs no second position
+            // request. Taken after the departure verdict rather than before it, so a slow weather
+            // lookup cannot delay the message saying where the drive started. Not for a departure
+            // that was thrown away because the car had already disconnected.
+            if (decision != DepartureDecision.Superseded)
+                (outcome.region ?: region)?.let { viewModelScope.launch { syncContextQuietly(known = it) } }
         }
     }
 

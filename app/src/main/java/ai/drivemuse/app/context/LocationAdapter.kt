@@ -84,7 +84,11 @@ class LocationAdapter(private val context: Context) {
     fun deleteZones() { regions.clear();cached=null }
     private companion object { const val BUDGET_MS=15_000L; const val PER_PROVIDER_MS=6_000L }
     fun clear() { cached=null;lastSuccess=0 }
-    private fun permitted() =
+    /**
+     * Whether a fix can be attempted at all. Public so the automatic paths can skip silently
+     * instead of putting a permission dialog in front of someone who only opened the app.
+     */
+    fun permitted() =
         ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED ||
         ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED
     /**
