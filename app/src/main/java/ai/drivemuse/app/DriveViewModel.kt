@@ -164,12 +164,13 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
     fun refreshWeather() {
         if(ui.value.driving) return
-        contextJob?.cancel();contextJob=viewModelScope.launch {
+        contextJob?.cancel();contextJob=viewModelScope.launch { working("위치와 날씨를 확인하는 중…") {
             region=location.refresh();weatherFact=region?.let { weather.get(it) };contextVersion++
             cancelSelection();coordinator.invalidate()
             val fact=weatherFact
             mutable.update { it.copy(weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "기상청 · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"} · ${java.time.Instant.ofEpochMilli(fact.observedAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime()}${if(fact.stale(System.currentTimeMillis())) " · 오래된 관측" else ""}") }
-        }
+            message(if(weatherFact==null) "날씨를 가져오지 못했어요. 기본 상황으로 추천합니다" else "날씨를 갱신했습니다")
+        } }
     }
     /** Registered zones, so the screen shows whether saving actually worked (§24). */
     private val zonesMutable = MutableStateFlow(emptySet<Zone>())
@@ -178,7 +179,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val poolMutable = MutableStateFlow("후보 확인 전")
     val poolStatus = poolMutable.asStateFlow()
     fun refreshPool() {
-        viewModelScope.launch {
+        if(ui.value.working!=null) { message("이미 처리 중이에요"); return }
+        viewModelScope.launch { working("후보를 불러오는 중…") {
             // Name what each Spotify source returned; "pool empty" alone never says which step failed.
             // Name every precondition separately. "Spotify가 안 돼요" is usually one of four
             // different things, and a single pass/fail hides which.
@@ -208,14 +210,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 onFailure = { "후보 ${after}곡 · $probe · 실패: " + (it.message ?: it::class.simpleName) }
             )
             message(poolMutable.value)
-        }
+        } }
     }
     fun refreshZones() { zonesMutable.value = runCatching { location.registeredZones() }.getOrDefault(emptySet()) }
-    fun registerZone(zone: Zone) { if(ui.value.driving) return;contextJob?.cancel();contextJob=viewModelScope.launch {
+    fun registerZone(zone: Zone) { if(ui.value.driving) return;contextJob?.cancel();contextJob=viewModelScope.launch { working("현재 위치를 확인하는 중…") {
         val ok = location.register(zone)
         refreshZones()
         message(if(ok) "${if (zone == Zone.HOME) "집" else "회사"}을(를) 등록했습니다" else "위치 권한과 정확도를 확인해 주세요. 실외에서 다시 시도하면 잘 잡혀요")
-    } }
+    } } }
     fun deleteZones() { if(ui.value.driving) return;contextJob?.cancel();location.deleteZones();region=null;weatherFact=null;weather.clear();contextVersion++;cancelSelection();viewModelScope.launch { coordinator.invalidate() };message("등록 영역을 삭제했습니다") }
     fun rate(track: Track, positive: Boolean) {
         if(ui.value.driving || ui.value.demo) return
@@ -268,11 +270,21 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         mutable.update { it.copy(page = page) }
     }
     fun message(text: String?) { mutable.update { it.copy(message=text) } }
+
+    /**
+     * Runs [block] with [label] on screen and clears it afterwards, whatever happens. Every action
+     * that can take more than an instant goes through this, so "did my tap register" stops being a
+     * question the user has to answer by waiting.
+     */
+    private suspend fun <T> working(label: String, block: suspend () -> T): T {
+        mutable.update { it.copy(working=label) }
+        try { return block() } finally { mutable.update { it.copy(working=null) } }
+    }
     fun onboard(demo: Boolean) { viewModelScope.launch { prefs.flag("onboarded",true); mutable.update { it.copy(demo=demo,context=if(demo) DriveContext.COMMUTE_HOME else DriveContext.GENERAL_DRIVE) }; if (demo) recommend() } }
     fun demo(value: Boolean) { cancelSelection();progress=DiscoveryProgress(); mutable.update { it.copy(demo=value,queue=emptyList(),connection=if(value) "데모 · 계정 미연결" else connectionLabel(settings.value)) } }
     fun driving(value: Boolean) { if(value) { cancelSelection();contextJob?.cancel() }; mutable.update { it.copy(driving=value,page="홈") } }
-    fun auto(value: Boolean) { if (ui.value.driving) return; viewModelScope.launch { prefs.flag("auto",value) } }
-    fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();markQueueStale(StaleReason.RULE_CHANGED);viewModelScope.launch { coordinator.invalidate();prefs.ratio(value) } }
+    fun auto(value: Boolean) { if (ui.value.driving) return; viewModelScope.launch { prefs.flag("auto",value);message(if(value) "차량 연결 시 알림을 켰습니다" else "차량 연결 알림을 껐습니다") } }
+    fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();markQueueStale(StaleReason.RULE_CHANGED);viewModelScope.launch { coordinator.invalidate();prefs.ratio(value);message("새 노래 비율을 ${(value*100).toInt()}%로 바꿨습니다") } }
     fun choose(context: DriveContext) { if (ui.value.driving) return; suspendAgent();contextVersion++;mutable.update { it.copy(context=context) }; recommend() }
 
     /** §8.5 — sign-in never appears while driving; Spotify consent runs in the browser when parked. */
@@ -596,10 +608,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if (parsed==null) message("‘퇴근길/출근길/여행/야간’, ‘잔잔하게·신나게’, ‘새 노래 30%’ 중 하나는 포함해 주세요")
         else mutable.update { it.copy(pendingRule=parsed) }
     }
-    fun confirmRule(save: Boolean) { if(save) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED) }; val r=ui.value.pendingRule; mutable.update { it.copy(pendingRule=null) }; if(save && r!=null && !ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(RuleEntity.from(r)) } }
-    fun deleteRule(id: String) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED); if (!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.deleteRule(id) } }
-    fun toggleRule(rule: RuleEntity) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED); if(!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(rule.copy(enabled=!rule.enabled)) } }
-    fun feedback(id: String, feedback: String) { if(!ui.value.driving) viewModelScope.launch { dao.feedback(id,feedback) } }
+    fun confirmRule(save: Boolean) { if(save) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED) }; val r=ui.value.pendingRule; mutable.update { it.copy(pendingRule=null) }; if(save && r!=null && !ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(RuleEntity.from(r));message("규칙을 저장했습니다. 다음 선곡부터 적용됩니다") } }
+    fun deleteRule(id: String) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED); if (!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.deleteRule(id);message("규칙을 삭제했습니다") } }
+    fun toggleRule(rule: RuleEntity) { cancelSelection();markQueueStale(StaleReason.RULE_CHANGED); if(!ui.value.driving) viewModelScope.launch { coordinator.invalidate();dao.putRule(rule.copy(enabled=!rule.enabled));message(if(rule.enabled) "규칙을 껐습니다" else "규칙을 켰습니다") } }
+    fun feedback(id: String, feedback: String) { if(!ui.value.driving) viewModelScope.launch { dao.feedback(id,feedback);message("의견을 기록했습니다") } }
     fun registerVehicle(id: String,name: String) { if(ui.value.driving) return; viewModelScope.launch { prefs.string("vehicleId",id); prefs.string("vehicleName",name); prefs.flag("connected",false); message("차량을 등록했습니다. 다음 연결부터 감지합니다") } }
     fun classifyNow() {
         val result = ContextEngine.classify(Signals(settings.value.connected,LocalDateTime.now()))
@@ -619,6 +631,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun resetAll() {
         if(ui.value.driving) return
         cancelSelection();accountJob?.cancel();surveyJob?.cancel();contextJob?.cancel();engine.clearCache()
-        edits.trySend { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearState();prefs.clear();observer.release();listeningMutable.value=ListeningSummary();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() }
+        edits.trySend { working("앱을 초기화하는 중…") { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearState();prefs.clear();observer.release();listeningMutable.value=ListeningSummary();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() };message("앱을 초기화했습니다") }
     }
 }

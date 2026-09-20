@@ -26,9 +26,12 @@ class MusicRepository(
     /** Why the last refresh produced nothing, for the diagnostics line (§20). */
     @Volatile var lastError: String? = null; private set
     suspend fun addSurveyCandidates(answers: List<SurveyAnswer>) = seedMutex.withLock {
-        val phrases=answers.filter { it.status==AnswerStatus.ANSWERED }.sortedByDescending { it.question.id=="Q7" }.flatMap { a ->
-            if(a.freeText.isNotBlank()) listOf(a.freeText.take(120)) else if(a.question.intent==Intent.PREFERENCE) a.question.options.filter { it.id in a.selected }.map { it.label+" music" } else emptyList()
-        }.distinct().take(3)
+        // Each typed name is its own query. The whole field used to go to search as one string, so
+        // a list of three artists searched for a string no track has ever been called.
+        val typed=SurveySeeds.terms(answers)
+        val fromOptions=answers.filter { it.status==AnswerStatus.ANSWERED && it.freeText.isBlank() && it.question.intent==Intent.PREFERENCE }
+            .flatMap { a -> a.question.options.filter { it.id in a.selected }.map { it.label+" music" } }
+        val phrases=(typed+fromOptions).distinct().take(5)
         lastSurveySeeds = phrases
         for(phrase in phrases) {
             val now=System.currentTimeMillis();val today=now/86400000;val s=prefs.flow.first();val used=if(s.quotaDay==today) s.searchCalls else 0

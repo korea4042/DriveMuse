@@ -24,7 +24,9 @@ object DirectInputSelector {
         val tracks: List<Track>,
         /** Candidates that passed the user's rules, before the batch was cut. */
         val eligible: Int,
-        val requested: Int
+        val requested: Int,
+        /** How many of the chosen tracks came from a name the user typed. */
+        val seeded: Int = 0
     ) {
         val short get() = tracks.size < requested
     }
@@ -46,12 +48,18 @@ object DirectInputSelector {
         sessionId: String,
         excluded: Set<String> = emptySet(),
         count: Int = Policy.BATCH_SIZE,
-        maxPerArtist: Int = Policy.MAX_PER_ARTIST
+        maxPerArtist: Int = Policy.MAX_PER_ARTIST,
+        /**
+         * Names the user typed in the survey. Preferring these is not a derived metric: it is the
+         * listener's own words, which is the one signal this mode is built to act on.
+         */
+        seeds: Collection<String> = emptyList()
     ): Outcome {
         val eligible = candidates
             .distinctBy { it.id }
             .filter { it.id !in excluded && Policy.validTrackId(it.id) && constraints.allows(it) }
-            .sortedBy { order(sessionId, it.id) }
+            // Seeded first, then the deterministic order within each group.
+            .sortedWith(compareByDescending<Track> { SurveySeeds.matches(it, seeds) }.thenBy { order(sessionId, it.id) })
 
         val perArtist = mutableMapOf<String, Int>()
         val picked = mutableListOf<Track>()
@@ -70,6 +78,36 @@ object DirectInputSelector {
                 if (picked.none { it.id == track.id }) picked += track
             }
         }
-        return Outcome(picked, eligible.size, count)
+        return Outcome(picked, eligible.size, count, picked.count { SurveySeeds.matches(it, seeds) })
+    }
+}
+
+/**
+ * The artists and titles the user typed into the survey, as separate terms.
+ *
+ * The field asks for "곡 또는 아티스트", so people list several. The whole string used to be sent
+ * as one Spotify query, and "에스파,카리나,엔믹스" matches nothing. Splitting is on separators only,
+ * never on spaces: a great many names contain one.
+ */
+object SurveySeeds {
+    private val separators = Regex("[,\\uFF0C/、|\\n\\r]+")
+
+    fun terms(answers: List<SurveyAnswer>): List<String> = answers
+        .filter { it.status == AnswerStatus.ANSWERED && it.freeText.isNotBlank() }
+        // The seed question first: those are the names the user actually chose to type.
+        .sortedByDescending { it.question.id == "Q7" }
+        .flatMap { it.freeText.split(separators) }
+        .map { it.trim().take(60) }
+        .filter { it.isNotBlank() }
+        .distinctBy { it.lowercase() }
+
+    /** Loose containment, so "에스파" matches the artist field however it is punctuated. */
+    fun matches(track: Track, terms: Collection<String>): Boolean {
+        if (terms.isEmpty()) return false
+        val haystack = (track.artist + " " + track.title).lowercase().replace(" ", "")
+        return terms.any { term ->
+            val needle = term.lowercase().replace(" ", "")
+            needle.length >= 2 && haystack.contains(needle)
+        }
     }
 }

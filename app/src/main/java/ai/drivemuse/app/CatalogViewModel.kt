@@ -107,8 +107,8 @@ class CatalogViewModel(application: Application) : AndroidViewModel(application)
     }
     fun removeIntegration(p: ProviderId) { viewModelScope.launch { runtime.integrations.remove(p) { if (p == ProviderId.YOUTUBE) runtime.db.dao().clearCandidates() }; messageMutable.value = "${label(p)} 연결을 삭제했습니다" } }
 
-    fun setAutoCollect(enabled: Boolean) { viewModelScope.launch { catalog.putControl((catalog.control("default") ?: CollectionControlEntity("default", 1, null, 0, null, 0, true, true)).copy(autoEnabled = enabled)); MetadataSyncWorker.schedule(getApplication(), collection.value.unmeteredOnly, enabled) } }
-    fun setUnmeteredOnly(only: Boolean) { viewModelScope.launch { catalog.putControl((catalog.control("default") ?: CollectionControlEntity("default", 1, null, 0, null, 0, true, true)).copy(unmeteredOnly = only)); MetadataSyncWorker.schedule(getApplication(), only, collection.value.autoEnabled) } }
+    fun setAutoCollect(enabled: Boolean) { viewModelScope.launch { catalog.putControl((catalog.control("default") ?: CollectionControlEntity("default", 1, null, 0, null, 0, true, true)).copy(autoEnabled = enabled)); MetadataSyncWorker.schedule(getApplication(), collection.value.unmeteredOnly, enabled); messageMutable.value = if (enabled) "자동 수집을 켰습니다" else "자동 수집을 껐습니다. 예약된 작업을 취소했어요" } }
+    fun setUnmeteredOnly(only: Boolean) { viewModelScope.launch { catalog.putControl((catalog.control("default") ?: CollectionControlEntity("default", 1, null, 0, null, 0, true, true)).copy(unmeteredOnly = only)); MetadataSyncWorker.schedule(getApplication(), only, collection.value.autoEnabled); messageMutable.value = if (only) "Wi-Fi에서만 수집합니다" else "데이터 네트워크에서도 수집합니다" } }
     /** Refreshes the Spotify pool directly: the old worker fed the retired Catalog path (§8). */
     fun topUpNow() { viewModelScope.launch {
         if (busyMutable.value != null) return@launch

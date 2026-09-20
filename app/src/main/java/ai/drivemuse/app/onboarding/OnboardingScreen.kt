@@ -2,6 +2,13 @@ package ai.drivemuse.app.onboarding
 
 import ai.drivemuse.domain.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -26,9 +33,40 @@ import androidx.compose.ui.unit.dp
                 },enabled=!busy,label={Text(c.label)},modifier=Modifier.fillMaxWidth().heightIn(min=56.dp))
             }
             if(q.options.isEmpty()) {
-                var text by remember(q.id,a.freeText) { mutableStateOf(a.freeText) }
-                OutlinedTextField(value=text,onValueChange={text=it.take(240)},label={Text("곡 또는 아티스트 (선택)")},modifier=Modifier.fillMaxWidth())
-                Button(onClick={answer(a.copy(freeText=text,status=AnswerStatus.ANSWERED))},enabled=!busy) {Text("답변 저장")}
+                // One name at a time. The old single field asked for "곡 또는 아티스트", so people
+                // typed a comma-separated list, and the whole string went to search as one query —
+                // "에스파,카리나,엔믹스" matches nothing. Splitting on commas would only guess, and
+                // guessing is wrong for the many names that contain a comma or a space. Adding them
+                // one by one means the app never has to guess, and the user can see what was kept.
+                val entries = remember(a.freeText) { a.freeText.split('\n').map { it.trim() }.filter { it.isNotBlank() } }
+                var draft by remember(q.id) { mutableStateOf("") }
+                fun commit(list: List<String>) = answer(a.copy(freeText=list.joinToString("\n").take(240),status=if(list.isEmpty()) AnswerStatus.SKIPPED else AnswerStatus.ANSWERED))
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value=draft,onValueChange={ draft=it.take(60) },
+                        label={Text("곡 또는 아티스트")},
+                        placeholder={Text("예: 에스파")},
+                        singleLine=true,
+                        keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),
+                        keyboardActions=KeyboardActions(onDone={ if(draft.isNotBlank()) { commit(entries+draft.trim()); draft="" } }),
+                        modifier=Modifier.weight(1f)
+                    )
+                    Button(onClick={ if(draft.isNotBlank()) { commit(entries+draft.trim()); draft="" } },
+                           enabled=!busy && draft.isNotBlank(),
+                           modifier=Modifier.heightIn(min=56.dp)) {Text("추가")}
+                }
+                if(entries.isEmpty()) Text("아직 추가한 이름이 없어요. 비워 두셔도 됩니다.",style=MaterialTheme.typography.bodySmall)
+                else {
+                    Text("추가한 ${entries.size}개 · 각각 따로 검색합니다",style=MaterialTheme.typography.bodySmall)
+                    FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        entries.forEach { name ->
+                            InputChip(selected=true,onClick={ commit(entries-name) },
+                                label={Text(name)},
+                                trailingIcon={ Icon(Icons.Outlined.Close,"$name 삭제",Modifier.size(18.dp)) },
+                                modifier=Modifier.heightIn(min=48.dp))
+                        }
+                    }
+                }
             }
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 listOf(AnswerStatus.UNKNOWN to "잘 모르겠어요",AnswerStatus.ANY to "상관없어요",AnswerStatus.NONE to "없어요").forEach { (status,label) -> TextButton(onClick={answer(a.copy(status=status))},enabled=!busy) {Text(label)} }

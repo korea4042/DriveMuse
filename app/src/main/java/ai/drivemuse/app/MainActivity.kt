@@ -31,6 +31,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -113,6 +115,14 @@ class MainActivity: ComponentActivity() {
             Box(Modifier.padding(padding)) { OnboardingScreen(survey!!,surveyBusy,vm::surveyAnswer,vm::surveyStep,vm::surveyConsent,vm::completeSurvey) }
         } else LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(22.dp),verticalArrangement=Arrangement.spacedBy(22.dp)) {
             item { Row(verticalAlignment=Alignment.CenterVertically) { Box(Modifier.weight(1f)) { Brand() }; IconButton(onClick={ vm.page("설정") },enabled=!ui.driving) { Icon(Icons.Outlined.Settings,"설정",tint=DriveColors.Muted) } } }
+            // A tap that talks to the network or the GPS used to change nothing on screen until it
+            // finished. This says what is running, from the moment it starts.
+            ui.working?.let { label -> item {
+                Row(Modifier.fillMaxWidth().semantics { contentDescription = label },verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp,color=DriveColors.Cyan)
+                    Text(label,fontSize=14.sp,color=DriveColors.Muted)
+                }
+            } }
             if (ui.driving) {
                 item { Title("지금은, 음악과 길에만.","운전 모드 · 설정과 입력을 잠시 숨겼어요") }
                 item { GlassSurface { AgentOrb(active=false); Text("사용자 선택 유지 중",fontSize=24.sp); Text("음악 조작은 Spotify 또는 차량 화면에서 이용하세요.",color=DriveColors.Muted) } }
