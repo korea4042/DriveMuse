@@ -48,6 +48,26 @@ jobs:
           path: app/schemas/**/*.json
           if-no-files-found: warn
 
+      # Artifact downloads redirect to blob storage that some environments cannot reach, so the
+      # same JSON is also staged on ci-logs where the plain contents API can read it. This is a
+      # transport for review only: the reviewed file is committed to the working branch by hand.
+      - name: Stage Room schemas for review
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method POST repos/$GITHUB_REPOSITORY/git/refs -f ref=refs/heads/ci-logs -f sha=$GITHUB_SHA || true
+          for f in app/schemas/*/*.json; do
+            [ -e "$f" ] || continue
+            DEST="schemas/$GITHUB_SHA/$(basename "$f")"
+            SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/$DEST?ref=ci-logs" --jq .sha 2>/dev/null || true)
+            if [ -n "$SHA" ]; then
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$DEST" -f message="schema export $GITHUB_SHA" -f branch=ci-logs -f content="$(base64 -w0 "$f")" -f sha="$SHA"
+            else
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$DEST" -f message="schema export $GITHUB_SHA" -f branch=ci-logs -f content="$(base64 -w0 "$f")"
+            fi
+          done
+
       # Actions log downloads are not reachable from every environment, so a failure tail is
       # committed to the ci-logs branch where the plain contents API can read it.
       - name: Publish failure tail
