@@ -161,7 +161,7 @@ private fun blank(direction: CommuteDirection) = CommuteSchedule(
         shape = MaterialTheme.shapes.small,
         color = if (selected) DriveColors.Blue else MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, if (selected) DriveColors.Blue else DriveColors.Muted),
-        modifier = Modifier.size(48.dp).semantics { contentDescription = "$label요일 ${if (selected) "선택됨" else "선택 안 됨"}" }
+        modifier = Modifier.size(48.dp).semantics { contentDescription = "${label}요일 ${if (selected) "선택됨" else "선택 안 됨"}" }
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(label, fontSize = 16.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
