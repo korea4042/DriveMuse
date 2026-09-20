@@ -161,6 +161,20 @@ jobs:
           mv apk/*.apk DriveMuse.apk
           VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
           CODE=$(grep -o 'versionCode = [0-9]*' app/build.gradle.kts | head -1 | grep -o '[0-9]*')
+          # Publishing the same versionCode twice ships a build the phone cannot tell from the one
+          # it already has, and the updater compares this number. Two such releases have already
+          # gone out, so the check lives here rather than in a reviewer's memory.
+          PREV=$(gh release view latest --json body --jq .body 2>/dev/null | grep -o 'versionCode [0-9]*' | grep -o '[0-9]*' || echo 0)
+          if [ -n "$PREV" ] && [ "$CODE" -le "$PREV" ]; then
+            echo "versionCode $CODE is not greater than the published $PREV. Bump it before merging." >&2
+            exit 1
+          fi
+          # Keep the build that is being replaced, so an upgrade test always has a baseline.
+          if [ "$PREV" != "0" ]; then
+            gh release download latest --pattern DriveMuse.apk --output previous.apk --clobber 2>/dev/null \
+              && gh release create "v$PREV" previous.apk --title "DriveMuse versionCode $PREV" --notes "Archived before publishing versionCode $CODE" 2>/dev/null \
+              || echo "no previous asset to archive"
+          fi
           # The app compares versionCode, because two builds can share a versionName.
           NOTES="versionCode $CODE · commit $GITHUB_SHA"
           if gh release view latest >/dev/null 2>&1; then
