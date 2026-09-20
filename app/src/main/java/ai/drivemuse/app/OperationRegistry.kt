@@ -169,6 +169,8 @@ class OperationRegistry(
         const val CONTEXT = "context"
         const val POOL = "pool"
         const val RESET = "reset"
+        const val DEPARTURE = "departure"
         fun zone(name: String) = "zone.$name"
+        fun schedule(direction: String) = "schedule.$direction"
     }
 }

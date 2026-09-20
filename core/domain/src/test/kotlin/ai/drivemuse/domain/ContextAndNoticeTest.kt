@@ -2,11 +2,8 @@ package ai.drivemuse.domain
 
 import org.junit.Assert.*
 import org.junit.Test
-import java.time.LocalDateTime
 
 class ContextAndNoticeTest {
-    private val morning = LocalDateTime.of(2026, 9, 21, 8, 10) // Monday
-    private val evening = LocalDateTime.of(2026, 9, 21, 18, 20)
 
     // --- §4: the two clocks are separate ---
 
@@ -27,31 +24,7 @@ class ContextAndNoticeTest {
         assertFalse(ContextFreshness.regionUsableForWeather(measured, ContextFreshness.FIX_FOR_REGION_MS + 1))
     }
 
-    // --- CTX04: a registered origin is evidence; the destination is not invented from it ---
-
-    @Test fun originAloneRaisesTheHypothesisWithoutConfirmingIt() {
-        val r = ContextEngine.classify(Signals(true, morning, origin = Zone.HOME))
-        assertEquals(DriveContext.COMMUTE_TO_WORK, r.context)
-        // Below the bar automation may act on: we know where they left, not where they are going.
-        assertTrue(r.confidence < .8)
-        assertFalse(Policy.canAutoSelect(true, true, r.confidence, 0, 1))
-        assertTrue(r.reasons.any { "도착지" in it })
-    }
-
-    @Test fun bothEndsKnownIsStillTheOnlyWayToReachCertainty() {
-        val r = ContextEngine.classify(Signals(true, evening, Zone.WORK, Zone.HOME))
-        assertEquals(DriveContext.COMMUTE_HOME, r.context)
-        assertEquals(1.0, r.confidence, 1e-9)
-        assertTrue(Policy.canAutoSelect(true, true, r.confidence, 0, 1))
-    }
-
-    @Test fun leavingWorkInTheMorningIsNotACommuteHome() {
-        assertEquals(DriveContext.GENERAL_DRIVE, ContextEngine.classify(Signals(true, morning, origin = Zone.WORK)).context)
-    }
-
-    @Test fun anUnregisteredOriginChangesNothing() {
-        assertEquals(DriveContext.GENERAL_DRIVE, ContextEngine.classify(Signals(true, morning)).context)
-    }
+    // CTX04's origin handling moved to ContextEstimator; see CommuteScheduleTest.
 
     // --- §30/UX04: relaxing the artist cap is reported, not silent ---
 

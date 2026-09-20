@@ -1,13 +1,6 @@
 package ai.drivemuse.domain
 import kotlin.test.*
-import java.time.LocalDateTime
 class DriveDomainTest {
-    private val monday = LocalDateTime.of(2026,9,14,19,0)
-    @Test fun noVehicleNoClassification() { assertEquals(DriveContext.UNKNOWN,ContextEngine.classify(Signals(false,monday)).context) }
-    @Test fun commuteConfidence() { assertEquals(1.0,ContextEngine.classify(Signals(true,monday,Zone.WORK,Zone.HOME)).confidence) }
-    @Test fun missingLocationDoesNotAutoPlay() { val r=ContextEngine.classify(Signals(true,monday)); assertFalse(Policy.canAutoSelect(true,true,r.confidence,0,1)) }
-    @Test fun boundaryMorning() { assertEquals(DriveContext.COMMUTE_TO_WORK,ContextEngine.classify(Signals(true,monday.withHour(6).withMinute(30),Zone.HOME,Zone.WORK)).context); assertEquals(DriveContext.GENERAL_DRIVE,ContextEngine.classify(Signals(true,monday.withHour(6).withMinute(29))).context) }
-    @Test fun nightWrapsMidnight() { assertEquals(DriveContext.GENERAL_DRIVE,ContextEngine.classify(Signals(true,monday.withHour(0))).context) }
     @Test fun readOnlyScope() { assertEquals("https://www.googleapis.com/auth/youtube.readonly",Policy.SCOPE_READONLY) }
     @Test fun handoffRejectsNonMusic() {
         assertTrue(Policy.playableTrack("10","none",231))

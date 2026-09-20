@@ -39,7 +39,12 @@ data class Settings(
     // §7: a drive session outlives the process. Restarting the app is not a new session.
     val sessionId: String = "",
     val sessionStartedAt: Long = 0,
-    val sessionLastActivityAt: Long = 0
+    val sessionLastActivityAt: Long = 0,
+    /** Commute schedules as JSON; see CommuteStore. Empty means the user has not set any. */
+    val commuteJson: String = "",
+    /** Night band boundaries in minutes from midnight, both configurable per §4. */
+    val nightStartMinutes: Int = 22 * 60,
+    val nightEndMinutes: Int = 6 * 60
 )
 class Preferences(private val context: Context) {
     val flow = context.driveStore.data.map { p ->
@@ -59,7 +64,10 @@ class Preferences(private val context: Context) {
             p[stringPreferencesKey("regionCode")] ?: "KR",
             p[stringPreferencesKey("sessionId")] ?: "",
             p[longPreferencesKey("sessionStartedAt")] ?: 0,
-            p[longPreferencesKey("sessionLastActivityAt")] ?: 0
+            p[longPreferencesKey("sessionLastActivityAt")] ?: 0,
+            p[stringPreferencesKey("commuteSchedules")] ?: "",
+            p[intPreferencesKey("nightStartMinutes")] ?: (22 * 60),
+            p[intPreferencesKey("nightEndMinutes")] ?: (6 * 60)
         )
     }
     suspend fun flag(key: String, value: Boolean) { context.driveStore.edit { it[booleanPreferencesKey(key)] = value } }

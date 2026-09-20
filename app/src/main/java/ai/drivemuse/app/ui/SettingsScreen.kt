@@ -50,6 +50,7 @@ import java.time.format.DateTimeFormatter
             SummaryRow(Icons.Outlined.AutoAwesome, "AI 추천", when { !aiReady -> "설정 필요"; IntegrationPolicy.effectiveEnabled(aiConsent, aiReady) -> "사용 중"; else -> "꺼짐" }, if (!aiReady) "설정 필요" else null) { onOpen("설정/AI") }
             SummaryRow(Icons.Outlined.WbSunny, "위치와 날씨", weatherLabel, if (!vm.weatherConfigured) "날씨 설정 필요" else null) { onOpen("설정/위치") }
             SummaryRow(Icons.Outlined.Home, "집과 회사", "장소를 등록하면 출퇴근 상황을 더 잘 이해해요", null) { onOpen("설정/장소") }
+            SummaryRow(Icons.Outlined.Schedule, "출퇴근과 이동 판단", commuteSummary(vm), if (commuteSummary(vm) == "일정 미설정") "설정 필요" else null) { onOpen("설정/출퇴근") }
             SummaryRow(Icons.Outlined.LibraryMusic, "음악 정보 수집", collection.lastSuccessAt?.let { "마지막 갱신 ${time(it)} · ${collection.phase}" } ?: collection.phase, null) { onOpen("설정/수집") }
         }
         GlassSurface {
@@ -272,6 +273,14 @@ import java.time.format.DateTimeFormatter
 }
 
 // ---- building blocks (§24 type/spacing) ----
+/** The two windows in one line, or the fact that there are none to show. */
+@Composable private fun commuteSummary(vm: DriveViewModel): String {
+    val schedules by vm.schedules.collectAsStateWithLifecycle()
+    val on = schedules.filter { it.enabled && it.weekdays.isNotEmpty() }
+    if (on.isEmpty()) return "일정 미설정"
+    return on.sortedBy { it.direction.ordinal }.joinToString(" · ") { "${it.direction.label} ${it.windowLabel}" }
+}
+
 @Composable fun SettingsTitle(title: String, sub: String) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(title, fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold); Text(sub, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) } }
 @Composable fun SectionTitle(text: String) = Text(text, fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold)
 @Composable fun SummaryRow(icon: ImageVector, title: String, status: String, badge: String?, onClick: () -> Unit) {
