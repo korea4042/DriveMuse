@@ -206,5 +206,6 @@ class OperationRegistry(
         const val DEPARTURE = "departure"
         fun zone(name: String) = "zone.$name"
         fun schedule(direction: String) = "schedule.$direction"
+        fun capability(shortcut: String) = "capability.$shortcut"
     }
 }

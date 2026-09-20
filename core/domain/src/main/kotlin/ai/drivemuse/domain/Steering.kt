@@ -453,3 +453,68 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
     private fun stuckToken(press: ActivePress) = "stuck:${press.pressId}"
     private fun tapToken(tap: PendingTap) = "tap:${tap.gestureId}"
 }
+
+/**
+ * What one stationary diagnostic run observed, per mapping.
+ *
+ * Kept separate from [CapabilityRecord] because a run is evidence and a record is a claim. The
+ * screen shows the run; saving it is a deliberate second step, and the strongest thing a
+ * foreground test can ever justify is [InputCapability.LIMITED].
+ */
+data class DiagnosticRun(
+    val shortcut: Shortcut,
+    val attempts: Int = 0,
+    val gesturesConfirmed: Int = 0,
+    val baseDispatches: Int = 0,
+    val discards: List<DiscardReason> = emptyList()
+) {
+    val clean get() = attempts > 0 && gesturesConfirmed == attempts && discards.isEmpty()
+
+    /**
+     * §3: a pass while the app is on screen is not a pass while driving. The diagnostic can only
+     * ever propose LIMITED/FOREGROUND_ONLY, never SUPPORTED — the background and Spotify-holding-
+     * the-session cases are not what it exercised.
+     */
+    fun proposed() = when {
+        attempts == 0 -> InputCapability.UNTESTED
+        gesturesConfirmed == 0 -> InputCapability.UNSUPPORTED
+        else -> InputCapability.LIMITED
+    }
+}
+
+/** Storage for capability records, same reasoning as CommuteCodec: no org.json, so it is testable. */
+object CapabilityCodec {
+    private const val FIELD = '\u001f'
+    private const val RECORD = '\u001e'
+    private const val VERSION = "c1"
+
+    fun encode(records: List<CapabilityRecord>) = records.joinToString(RECORD.toString()) { r ->
+        listOf(VERSION, r.vehicleId, r.transport.name, r.shortcut.name, r.capability.name,
+            r.conditions.sortedBy { it.name }.joinToString(",") { it.name },
+            r.checkedAt.toString(), r.appVersionCode.toString(), r.osBuild, r.playerVersion, r.note
+        ).joinToString(FIELD.toString())
+    }
+
+    fun decode(raw: String): List<CapabilityRecord> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(RECORD).mapNotNull { record ->
+            runCatching {
+                val f = record.split(FIELD)
+                require(f.size >= 11 && f[0] == VERSION)
+                CapabilityRecord(
+                    vehicleId = f[1],
+                    transport = Transport.valueOf(f[2]),
+                    shortcut = Shortcut.valueOf(f[3]),
+                    capability = InputCapability.valueOf(f[4]),
+                    conditions = f[5].split(",").filter { it.isNotBlank() }
+                        .mapNotNull { c -> runCatching { CapabilityCondition.valueOf(c) }.getOrNull() }.toSet(),
+                    checkedAt = f[6].toLong(),
+                    appVersionCode = f[7].toInt(),
+                    osBuild = f[8],
+                    playerVersion = f[9],
+                    note = f.drop(10).joinToString(FIELD.toString())
+                )
+            }.getOrNull()
+        }
+    }
+}

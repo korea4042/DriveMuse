@@ -54,7 +54,11 @@ data class Settings(
     val departureAt: Long = 0,
     val departureZone: String = "UNKNOWN",
     /** When the car disconnected. Zero while connected; a reconnection inside ten minutes resumes. */
-    val departureEndedAt: Long = 0
+    val departureEndedAt: Long = 0,
+    /** Steering shortcut capability records, encoded by CapabilityCodec. */
+    val steeringJson: String = "",
+    /** The lab master switch. Off by default and inert until a mapping is verified. */
+    val steeringEnabled: Boolean = false
 )
 class Preferences(private val context: Context) {
     val flow = context.driveStore.data.map { p ->
@@ -80,7 +84,9 @@ class Preferences(private val context: Context) {
             p[intPreferencesKey("nightEndMinutes")] ?: (6 * 60),
             p[longPreferencesKey("departureAt")] ?: 0,
             p[stringPreferencesKey("departureZone")] ?: "UNKNOWN",
-            p[longPreferencesKey("departureEndedAt")] ?: 0
+            p[longPreferencesKey("departureEndedAt")] ?: 0,
+            p[stringPreferencesKey("steeringCapabilities")] ?: "",
+            p[booleanPreferencesKey("steeringEnabled")] ?: false
         )
     }
     /** Written as one edit so a reader never sees a zone belonging to a different departure. */
