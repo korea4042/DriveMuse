@@ -82,6 +82,7 @@ class LocationAdapter(private val context: Context) {
         regions.save(zone,location);cached=null;return LocationStatus.AVAILABLE
     }
     fun deleteZones() { regions.clear();cached=null }
+    private companion object { const val BUDGET_MS=15_000L; const val PER_PROVIDER_MS=6_000L }
     fun clear() { cached=null;lastSuccess=0 }
     private fun permitted() =
         ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED ||
@@ -100,10 +101,13 @@ class LocationAdapter(private val context: Context) {
         val enabled=providers()
         if(enabled.isEmpty()) return LocationStatus.DISABLED to null
         var worst=LocationStatus.UNAVAILABLE
+        // §3: fifteen seconds for the whole request, shared across providers. Fifteen *each* would
+        // be a forty-five second wait behind a spinner.
+        val deadline=System.currentTimeMillis()+BUDGET_MS
         for(provider in enabled) {
-            // Per provider, not per request: three providers at the old fifteen seconds each would
-            // be a forty-five second wait behind a spinner.
-            val answer=withTimeoutOrNull(6000) { ask(provider) }
+            val remaining=deadline-System.currentTimeMillis()
+            if(remaining<=0L) { worst=LocationStatus.TIMEOUT; break }
+            val answer=withTimeoutOrNull(minOf(remaining,PER_PROVIDER_MS)) { ask(provider) }
             if(answer==null) { worst=LocationStatus.TIMEOUT; continue }
             val (status,location)=answer
             if(location!=null) return LocationStatus.AVAILABLE to location

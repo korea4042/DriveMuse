@@ -42,7 +42,9 @@ data class UiState(
      * chosen by an if/else chain, so a batch that was short *and* had an unapplied energy rule
      * *and* had to break the artist cap reported exactly one of the three and hid the rest.
      */
-    val notices: List<String> = emptyList()
+    val notices: List<String> = emptyList(),
+    /** §7: source, region, observation time, lookup time and freshness, each stated separately. */
+    val weatherDetail: String = "아직 조회하지 않았어요"
 ) {
     /** Re-selection fixes conditions that moved; it does not fix a queue awaiting verification. */
     val needsReselect get() = stale.any { it.fixedByReselection }
@@ -192,7 +194,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             cancelSelection();coordinator.invalidate()
             val now=System.currentTimeMillis()
             val fact=weatherFact?.takeIf { f -> region?.let { ContextFreshness.regionUsableForWeather(it.measuredAt,now) && f.usable(it.id,now) }==true }
-            mutable.update { it.copy(weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "Open-Meteo · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"} · ${java.time.Instant.ofEpochMilli(fact.observedAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime()}${if(fact.stale(now)) " · 오래된 관측" else ""}") }
+            fun clock(at: Long) = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0)
+            mutable.update { it.copy(
+                weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "${fact.source} · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"}${if(fact.stale(now)) " · 오래된 관측" else ""}",
+                weatherDetail=if(fact==null) "날씨 없음 · 지역 ${region?.id ?: "미확인"}"
+                    else "출처 ${fact.source} · 지역 ${fact.region} · 관측 ${clock(fact.observedAt)} · 조회 ${clock(fact.fetchedAt)} · ${if(fact.stale(now)) "오래된 관측" else "최신"}") }
             message(when {
                 fact!=null && outcome.status==LocationStatus.AVAILABLE -> "날씨를 갱신했습니다"
                 fact!=null -> "위치를 새로 확인하지 못해 직전 지역의 날씨를 그대로 사용합니다"
@@ -479,8 +485,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                     if("INSUFFICIENT_CANDIDATES" in selection.unmet) add("조건을 통과한 후보 자체가 적어요 · 설정에서 후보를 더 불러와 주세요")
                     if("EXCLUSION_CONFLICT" in selection.unmet) add("설문의 제외 조건끼리 충돌해 일부 조건만 적용했어요 · 제외 장르를 확인해 주세요")
                     if("REQUIRED_FEATURE_UNAVAILABLE" in selection.unmet) add("요청한 특성을 확인할 수 있는 후보가 없어 그 조건은 적용하지 못했어요")
+                    if(validWeather==null && !snapshot.demo) add("날씨를 확인하지 못해 날씨 조건 없이 골랐어요")
                 }
-                mutable.update { it.copy(queue=if(append) carried+queue else queue,stale=emptySet(),engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" },notices=notices) }
+                mutable.update { it.copy(queue=if(append) carried+queue else queue,stale=emptySet(),engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason=reasonLine(snapshot.context,effective,direct,selection.adjustment),notices=notices) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
                 // The notices stay on the card instead of racing each other through one snackbar.
                 return PrepareOutcome.Prepared
@@ -520,6 +527,27 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
 
     /** §6.8 — every failure has one recovery path and only re-auth is worth surfacing. */
+    /**
+     * §4: say what was actually applied. Direct-input mode does not read the discovery ratio at
+     * all, so printing "새 노래 목표 40%" over a batch that never consulted it reported an
+     * unapplied setting as an achievement.
+     */
+    private fun reasonLine(context: DriveContext, effective: EffectiveRules, direct: DirectInputSelector.Outcome?, adjustment: String): String {
+        if(direct!=null) {
+            val applied=buildList {
+                add("설문의 제외 조건")
+                add(if(direct.capRelaxed) "아티스트 분산(완화)" else "아티스트 분산")
+                if(direct.seeded>0) add("직접 입력한 이름 ${direct.seeded}곡")
+            }
+            return "${context.label} · ${applied.joinToString(" · ")}을 적용했어요"
+        }
+        return "${context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(adjustment) {
+            "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요"
+            "FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요"
+            "EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요"
+            else->"설정된 취향을 바탕으로 골랐어요"
+        }
+    }
     private fun explain(e: Throwable): String = when (e) {
         is QuotaExceededException -> "오늘의 조회 한도를 모두 사용했습니다. 저장된 후보로 계속 재생할 수 있어요"
         is ai.drivemuse.app.spotify.SpotifyAuthRequired -> "Spotify 계정 연결을 다시 확인해 주세요"

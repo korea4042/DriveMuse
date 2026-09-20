@@ -216,13 +216,15 @@ import java.time.format.DateTimeFormatter
 }
 
 /** Detail: location and weather (§24). The key has a field now, and the state says what is stored. */
-@Composable fun WeatherDetail(vm: DriveViewModel, cvm: CatalogViewModel, weatherLabel: String, driving: Boolean, onRefresh: () -> Unit) {
+@Composable fun WeatherDetail(vm: DriveViewModel, cvm: CatalogViewModel, weatherLabel: String, weatherDetail: String, driving: Boolean, onRefresh: () -> Unit) {
     val integrations by cvm.integrations.collectAsStateWithLifecycleCompat(); val busy by cvm.busy.collectAsStateWithLifecycleCompat()
     val locationStatus by vm.locationStatus.collectAsStateWithLifecycle()
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("위치와 날씨", "대략 위치로 지역 날씨만 확인합니다")
         GlassSurface {
             Text(weatherLabel, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
+            // §7: source, region, observation time, lookup time and freshness, stated separately.
+            Text(weatherDetail, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             // §7: name the failure. "위치를 가져오지 못했어요" was the same sentence whether the
             // permission was refused, the radios were off, or the fix simply took too long.
             locationStatus?.takeIf { it != LocationStatus.AVAILABLE }?.let {

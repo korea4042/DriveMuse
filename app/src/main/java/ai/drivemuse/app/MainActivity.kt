@@ -180,7 +180,7 @@ class MainActivity: ComponentActivity() {
                 }
                 "설정/재생" -> item { PlaybackDetail(diagnostic.state.toString(),diagnostic.hasMediaId,diagnostic.positionMs,ai.drivemuse.app.playback.MediaObservationService.granted(appContext)) { appContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) } }
                 "설정/AI" -> item { AiDetail(cvm,vm.aiConfigured,survey?.aiConsent==true,ui.driving,vm::surveyConsent) { vm.message("Firebase 콘솔 → 프로젝트 설정에서 프로젝트 ID·앱 ID·웹 API 키를 확인하고, 사용할 모델 ID를 함께 입력하세요") } }
-                "설정/위치" -> item { WeatherDetail(vm,cvm,ui.weatherLabel,ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } }
+                "설정/위치" -> item { WeatherDetail(vm,cvm,ui.weatherLabel,ui.weatherDetail,ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } }
                 "설정/장소" -> item { PlacesDetail(vm,{deleteWhat="home"},{deleteWhat="work"},{deleteWhat="zones"},ui.driving) }
                 "설정/수집" -> item { CollectionDetail(vm,cvm,ui.driving) }
                 "설정/차량" -> {
