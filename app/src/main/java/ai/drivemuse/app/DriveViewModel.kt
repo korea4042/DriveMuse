@@ -39,7 +39,7 @@ data class UiState(
     val stale: Set<StaleReason> = emptySet()
 ) {
     /** Re-selection fixes conditions that moved; it does not fix a queue awaiting verification. */
-    val needsReselect get() = stale.any { !it.clearedByConfirmedPlayback }
+    val needsReselect get() = stale.any { it.fixedByReselection }
     val staleLabel get() = when {
         needsReselect -> "조건이 바뀌었어요 · 다시 고르기"
         StaleReason.CONTROL_LOST in stale -> "다른 곡이 재생됐어요 · 목록에서 다시 선택"
@@ -66,7 +66,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     // and the last track of a batch triggers the next one.
     private val scheduler=NextBatchScheduler({ base -> prepareNextBatch(base) }, viewModelScope)
     private val observer=PlaybackObserver(db,learning,{ sessionId },System::currentTimeMillis,
-        { id,ordinal,size -> scheduler.onStarted(id,ordinal,size) },
+        { id,ordinal,size -> onPlannedStart(id,ordinal,size) },
         { id -> onUnplannedPlayback(id) })
     private val location=LocationAdapter(application)
     private val weather=WeatherRepository()
@@ -256,7 +256,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         when {
             // Only reasons a confirmed playback cannot clear block the next button. A queue merely
             // waiting to be re-verified is unblocked by playing from it, which is what this does.
-            ui.value.stale.any { !it.clearedByConfirmedPlayback } ->
+            ui.value.stale.any { it.fixedByReselection } ->
                 message("목록이 현재 조건과 달라요. 다시 선곡한 뒤 이어서 들어 주세요")
             settings.value.controlLost ->
                 message("자동 선곡이 멈춘 상태예요. 목록에서 곡을 선택하면 다시 시작합니다")
@@ -515,6 +515,19 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * the start failed or its result was unclear, the app does not know what is in the queue and
      * has no business filling it.
      */
+    /**
+     * A planned recording started. Anything past the first slot came out of the queue the app sent,
+     * which is the only evidence that those commands actually landed — DELIVERY_UNCERTAIN is raised
+     * on an unclear queue result and can be cleared by nothing else.
+     */
+    private suspend fun onPlannedStart(trackId: String, ordinal: Int, plannedSize: Int) {
+        if (ordinal > 0 && StaleReason.DELIVERY_UNCERTAIN in ui.value.stale) {
+            mutable.update { it.copy(stale=it.stale-StaleReason.DELIVERY_UNCERTAIN) }
+        }
+        scheduler.onStarted(trackId, ordinal, plannedSize)
+    }
+
+    /** The driver asked for playback or a new session began: automation may own the queue again. */
     private suspend fun regainControl(capturedEpoch: Long) {
         // FIX-B: a start confirmed after a fresh intervention is confirming the wrong world. The
         // late callback is ignored rather than allowed to hand the queue back.
@@ -594,10 +607,13 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
                 is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
             }
-            if (unclear > 0) mutable.update { it.copy(stale=it.stale+StaleReason.DELIVERY_UNCERTAIN) }
+
             // R09: the request was not the recovery. A confirmed start of the intended recording
             // is. On failure or an unclear result the app stays out of the queue.
             regainControl(capturedEpoch)
+            // Raised after recovery, not before: control is back, but what Spotify did with the
+            // queue commands is still unknown and only observing a later track can settle it.
+            if (unclear > 0) mutable.update { it.copy(stale=it.stale+StaleReason.DELIVERY_UNCERTAIN) }
             refreshListening()
             message("${track.artist} ${track.title} 재생 시작" +
                 (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기" + (if (unclear > 0) " · ${unclear}곡 결과 불명" else "")) +
