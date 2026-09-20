@@ -116,7 +116,8 @@ class CommuteScheduleTest {
         origin: Zone = Zone.HOME,
         schedules: List<CommuteSchedule> = listOf(schedule()),
         manual: ContextPurpose? = null
-    ) = ContextInput(connected, at(date, time), manual, origin, schedules)
+    ) = ContextInput(connected = connected, at = at(date, time), manual = manual,
+        originZone = origin, schedules = schedules)
 
     @Test fun homePlusAMorningScheduleEstimatesACommuteAndKeepsTheArrivalUnknown() {
         val a = ContextEstimator.assess(input())
