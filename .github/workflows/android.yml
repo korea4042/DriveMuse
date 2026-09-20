@@ -38,6 +38,15 @@ jobs:
         run: |
           set -o pipefail
           chmod +x gradlew && ./gradlew :core:domain:test :app:testDebugUnitTest :app:assembleDebug 2>&1 | tee /tmp/build.log
+      # The migration test only proves the committed schema is consistent with itself. If an entity
+      # changed without exporting, the build regenerates a different JSON and this catches it.
+      - name: Schema matches the committed JSON
+        run: |
+          if ! git diff --exit-code -- app/schemas; then
+            echo "Exported Room schema differs from the committed JSON. Commit the regenerated file." >&2
+            exit 1
+          fi
+          git status --porcelain app/schemas | grep . && { echo "Untracked schema file was generated; commit it." >&2; exit 1; } || true
       # Room writes app/schemas during the build. The JSON is reviewed and committed by hand, so
       # it is published as an artifact rather than pushed back into the branch.
       - name: Upload Room schemas
@@ -91,22 +100,6 @@ jobs:
           else
             gh api --method PUT repos/$GITHUB_REPOSITORY/contents/ci-failure.log -f message="ci failure $GITHUB_SHA" -f branch=ci-logs -f content="$(base64 -w0 /tmp/tail.txt)"
           fi
-      # A rolling release so the phone can install straight from a stable URL instead of
-      # unzipping a build artifact: /releases/latest/download/DriveMuse.apk
-      - name: Publish rolling release
-        if: success() && github.ref == 'refs/heads/master'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
-          cp app/build/outputs/apk/debug/app-debug.apk DriveMuse.apk
-          NOTES="버전 $VERSION · 커밋 ${GITHUB_SHA:0:7} · $(date -u -d '+9 hours' '+%Y-%m-%d %H:%M') KST"
-          if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title "DriveMuse $VERSION" --notes "$NOTES" --prerelease=false --latest
-          else
-            gh release create latest --title "DriveMuse $VERSION" --notes "$NOTES" --latest
-          fi
-          gh release upload latest DriveMuse.apk --clobber
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -146,3 +139,31 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: chmod +x gradlew && ./gradlew :app:connectedDebugAndroidTest
+
+  publish:
+    name: Publish rolling release
+    # FIX-E: the release used to ride inside the build job, so a failed or still-running migration
+    # could not stop it. Both gates must pass before anything reaches the stable APK URL.
+    needs: [build, migration]
+    if: success() && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The artifact from the build job, so the published APK is the one that was tested.
+      - uses: actions/download-artifact@v4
+        with:
+          name: DriveMuse-debug-${{ github.sha }}
+          path: apk
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mv apk/*.apk DriveMuse.apk
+          VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
+          NOTES="commit $GITHUB_SHA"
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title "DriveMuse $VERSION" --notes "$NOTES" --prerelease=false --latest
+          else
+            gh release create latest --title "DriveMuse $VERSION" --notes "$NOTES" --latest
+          fi
+          gh release upload latest DriveMuse.apk --clobber
