@@ -1,8 +1,12 @@
 package ai.drivemuse.app.playback
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -30,17 +34,30 @@ class NextBatchScheduler(
     private val prepare: suspend (Long) -> PrepareOutcome,
     /** Where preparation runs. Never the collector: see [onStarted]. */
     private val scope: CoroutineScope,
-    private val maxAttempts: Int = 2
+    private val maxAttempts: Int = 3,
+    /** Delay before attempt n (1-based). Injectable so tests do not wait. */
+    private val backoffMs: (Int) -> Long = { attempt -> 5_000L * attempt }
 ) {
     private val mutex = Mutex()
     private var revision = 0L
     private var running = false
     private var preparedFor: String? = null
-    private var attempts = 0
     private var job: Job? = null
 
-    /** Called whenever the queue is replaced or dropped, so requests in flight stop applying. */
-    suspend fun reset() { mutex.withLock { preparedFor = null; attempts = 0; revision++; job?.cancel(); job = null } }
+    /**
+     * Called whenever the queue is replaced or dropped, so requests in flight stop applying.
+     *
+     * Clearing `running` here matters: a cancelled job never reaches the block that would have
+     * cleared it, and a stuck `running` makes every later start return early — the batch would
+     * then never be prepared again for the life of the session.
+     */
+    suspend fun reset() {
+        val cancelled = mutex.withLock {
+            preparedFor = null; revision++; running = false
+            job.also { job = null }
+        }
+        cancelled?.cancel()
+    }
 
     /** True while the caller's proposal is still based on the queue the app currently owns. */
     suspend fun accepts(base: Long) = mutex.withLock { base == revision }
@@ -48,12 +65,13 @@ class NextBatchScheduler(
     /**
      * FIX-C. This used to await prepare() inside the player-state collector, so for as long as
      * selection and the network took, no player callback was processed — exactly the window in
-     * which an external track change would be missed. It now hands the work to the session scope
-     * and returns immediately.
+     * which an external track change would be missed. It hands the work to the session scope and
+     * returns immediately.
      *
-     * preparedFor also used to be set before the work and never cleared on failure, so one failed
-     * preparation stopped the batch being prepared ever again. It is cleared on a retryable
-     * failure, up to a small bound.
+     * Retries are scheduled here rather than left to the next start. The observer announces a
+     * given attempt once, so while the last track of a batch keeps playing there is no second
+     * notification to retry on: clearing a marker and hoping was not a retry at all. Attempts stop
+     * as soon as the queue moves, since a proposal for a queue that no longer exists is worthless.
      */
     suspend fun onStarted(trackId: String, ordinal: Int, plannedSize: Int) {
         val base = mutex.withLock {
@@ -62,22 +80,29 @@ class NextBatchScheduler(
             if (running || preparedFor == trackId) return
             running = true; preparedFor = trackId; revision
         }
-        job = scope.launch {
-            val outcome = runCatching { prepare(base) }
-                .getOrElse { PrepareOutcome.RetryableFailure(it.message ?: it::class.simpleName ?: "알 수 없는 오류") }
-            mutex.withLock {
-                running = false
-                when (outcome) {
-                    is PrepareOutcome.RetryableFailure -> {
-                        attempts++
-                        // Let the next start try again, unless it has already failed enough times.
-                        if (attempts < maxAttempts) preparedFor = null
-                    }
-                    is PrepareOutcome.Prepared -> attempts = 0
-                    // Stale and Exhausted are answers, not failures to retry around.
-                    else -> Unit
+        val started = scope.launch {
+            try {
+                var attempt = 1
+                while (true) {
+                    // CancellationException must propagate: a cancelled preparation is not a
+                    // failure to retry around, and swallowing it would retry against a dead queue.
+                    val outcome = try { prepare(base) }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { PrepareOutcome.RetryableFailure(e.message ?: e::class.simpleName ?: "알 수 없는 오류") }
+                    if (outcome !is PrepareOutcome.RetryableFailure || attempt >= maxAttempts) break
+                    delay(backoffMs(attempt))
+                    // The queue moved while waiting; whatever we would prepare is already stale.
+                    if (!accepts(base)) break
+                    attempt++
+                }
+            } finally {
+                // NonCancellable: on cancellation this still has to run, but only if reset() has
+                // not already taken over the state for a newer queue.
+                withContext(NonCancellable) {
+                    mutex.withLock { if (base == revision) running = false }
                 }
             }
         }
+        mutex.withLock { if (base == revision) job = started else started.cancel() }
     }
 }

@@ -20,8 +20,21 @@ enum class StaleReason {
     /** Tracks were sent but their fate is unknown. Cleared by re-reading the player. */
     DELIVERY_UNCERTAIN;
 
-    /** Whether confirming playback of an intended recording is enough to clear this one. */
-    val clearedByConfirmedPlayback get() = this == CONTROL_LOST || this == RESTORE_UNVERIFIED || this == DELIVERY_UNCERTAIN
+    /**
+     * Whether confirming playback of the intended recording is enough to clear this one.
+     *
+     * DELIVERY_UNCERTAIN is deliberately not in this set. Hearing the track the user chose says
+     * nothing about the tracks queued behind it, and treating it as proof cleared the flag in the
+     * same breath as it was raised.
+     */
+    val clearedByConfirmedPlayback get() = this == CONTROL_LOST || this == RESTORE_UNVERIFIED
+
+    /**
+     * Whether choosing again is what fixes it. Only conditions that moved qualify: re-running
+     * selection cannot tell you what Spotify did with a queue command, and an unverified restored
+     * list is fixed by playing from it, not by replacing it.
+     */
+    val fixedByReselection get() = this == PROFILE_CHANGED || this == RULE_CHANGED
 }
 
 /**
