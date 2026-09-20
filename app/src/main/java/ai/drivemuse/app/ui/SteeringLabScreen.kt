@@ -2,6 +2,7 @@ package ai.drivemuse.app.ui
 
 import ai.drivemuse.app.DriveViewModel
 import ai.drivemuse.app.OperationRegistry
+import ai.drivemuse.app.Settings
 import ai.drivemuse.app.steering.RawKey
 import ai.drivemuse.app.steering.SteeringKeyTap
 import ai.drivemuse.designsystem.*
