@@ -94,4 +94,21 @@ assert db.execute('SELECT count(*) FROM enrichment_state').fetchone()==(0,), 'st
 assert db.execute('SELECT count(*) FROM played').fetchone()==(1,)
 assert db.execute('SELECT count(*) FROM metadata_assertion').fetchone()==(0,)
 
-print('PASS: additive migrations v1→v8 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns, key batches by (sessionId, generation, batchSeq) matching the exported schema 8, and cascade the v9 enrichment tables from candidates')
+# The cascade has a sharp edge: `INSERT OR REPLACE` deletes the old row first, so a DAO that writes
+# candidates with OnConflictStrategy.REPLACE would wipe the enrichment of every track the next pool
+# refresh saw again. putCandidates must upsert. This is the SQL half; the annotation is checked below.
+db.execute("INSERT INTO candidates VALUES ('abcdefghijk','Blue Hour','Northbound',210,'',0,.5,.5,NULL,'chart',1000,NULL,NULL,NULL,NULL,NULL)")
+db.execute("INSERT INTO candidate_assertion VALUES ('a3','abcdefghijk','tag','chill','COMMUNITY_TAG','LASTFM',.65,'[]',1,0,NULL)")
+cols=[r[1] for r in db.execute('PRAGMA table_info(candidates)')]
+row=list(db.execute("SELECT * FROM candidates WHERE videoId='abcdefghijk'").fetchone())
+assignments=', '.join('%s=?' % c for c in cols if c!='videoId')
+db.execute("INSERT INTO candidates VALUES (%s) ON CONFLICT(videoId) DO UPDATE SET %s" % (','.join('?'*len(cols)), assignments),
+           row+[v for c,v in zip(cols,row) if c!='videoId'])
+assert db.execute('SELECT count(*) FROM candidate_assertion').fetchone()==(1,), 'upsert of a candidate dropped its assertions'
+db.execute("INSERT OR REPLACE INTO candidates VALUES (%s)" % ','.join('?'*len(cols)), row)
+assert db.execute('SELECT count(*) FROM candidate_assertion').fetchone()==(0,), 'expected REPLACE to cascade; the guard below would be pointless'
+storage=s
+marker='@Upsert suspend fun putCandidates'
+assert marker in storage, 'putCandidates must be @Upsert: REPLACE cascades the enrichment tables away'
+
+print('PASS: additive migrations v1→v8 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns, key batches by (sessionId, generation, batchSeq) matching the exported schema 8, cascade the v9 enrichment tables from candidates, and keep those rows across a pool refresh')

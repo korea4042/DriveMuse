@@ -167,7 +167,13 @@ class Preferences(private val context: Context) {
     @Query("DELETE FROM history") suspend fun clearHistory()
     @Query("DELETE FROM rules") suspend fun clearRules()
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putCandidates(rows: List<CandidateEntity>)
+    /**
+     * Upsert, not REPLACE. `INSERT OR REPLACE` deletes the conflicting row before inserting the new
+     * one, and since v9 `candidate_assertion` and `enrichment_state` cascade from this table — so
+     * with REPLACE every pool refresh silently threw away the enrichment for every track it saw
+     * again, which is most of them. An upsert updates the row in place and the assertions survive.
+     */
+    @Upsert suspend fun putCandidates(rows: List<CandidateEntity>)
     @Query("SELECT * FROM candidates WHERE fetchedAt >= :cutoff") suspend fun candidates(cutoff: Long): List<CandidateEntity>
     @Query("SELECT COUNT(*) FROM candidates WHERE fetchedAt >= :cutoff") suspend fun candidateCount(cutoff: Long): Int
     @Query("DELETE FROM candidates WHERE fetchedAt < :cutoff") suspend fun pruneCandidates(cutoff: Long)
