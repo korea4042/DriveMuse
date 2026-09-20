@@ -282,6 +282,109 @@ class SteeringGestureReducerTest {
         assertTrue(fx.commands().isEmpty())
     }
 
+    // --- the four defects this round ---
+
+    @Test fun holdingPastTheSnapshotAgeStillRates() {
+        // The dislike window is 800ms to 5s. Measuring the snapshot's age at the release made the
+        // hold itself count as staleness, so anything held beyond about two seconds was dropped
+        // silently — with no feedback to the driver at all.
+        val fresh = track("t1", at = 0)
+        val (_, fx) = run(
+            SteeringEvent.Key(input(SteeringKey.PLAY_PAUSE, KeyAction.DOWN, 0), fresh),
+            SteeringEvent.Key(input(SteeringKey.PLAY_PAUSE, KeyAction.UP, 0, at = 4_500), track("t1", at = 4_500)))
+        assertEquals(listOf(ShortcutAction.RATE_DOWN), fx.commands().map { it.action })
+        assertEquals("t1", fx.commands().single().target?.trackId)
+    }
+
+    @Test fun aSnapshotAlreadyOldAtTheDownIsStillRefused() {
+        val stale = track("t1", at = -t.trackSnapshotMaxAgeMs - 1)
+        val (_, fx) = run(
+            SteeringEvent.Key(input(SteeringKey.PLAY_PAUSE, KeyAction.DOWN, 0), stale),
+            SteeringEvent.Key(input(SteeringKey.PLAY_PAUSE, KeyAction.UP, 0, at = 1_000), stale))
+        assertEquals(listOf(DiscardReason.STALE_SNAPSHOT), fx.discards())
+    }
+
+    @Test fun aResyncPressHeldTooLongDoesNotClearTheBlock() {
+        var state = SteeringState.initial(all)
+        val first = input(SteeringKey.NEXT, KeyAction.DOWN, 0)
+        state = reducer.reduce(state, key(first)).state
+        state = reducer.reduce(state, SteeringEvent.Timeout("stuck:${first.pressId}", t.stuckPressMs)).state
+
+        // The re-sync attempt is itself held past the stuck threshold, and its UP beats the timer.
+        val second = reducer.reduce(state, key(input(SteeringKey.NEXT, KeyAction.DOWN, 10_000)))
+        val release = reducer.reduce(second.state, key(input(SteeringKey.NEXT, KeyAction.UP, 10_000, at = 10_000 + t.stuckPressMs)))
+        assertEquals(listOf(DiscardReason.STUCK_PRESS), release.effects.discards())
+
+        // Still blocked, so the next long press is a re-sync rather than a command.
+        val thirdDown = reducer.reduce(release.state, key(input(SteeringKey.NEXT, KeyAction.DOWN, 20_000)))
+        val thirdUp = reducer.reduce(thirdDown.state, key(input(SteeringKey.NEXT, KeyAction.UP, 20_000, at = 21_000)))
+        assertTrue(thirdUp.effects.commands().isEmpty())
+        assertEquals(listOf(DiscardReason.RESYNC), thirdUp.effects.discards())
+    }
+
+    @Test fun aSessionHandoverMidPressDropsTheGesture() {
+        val (state, fx) = run(
+            key(input(SteeringKey.PLAY_PAUSE, KeyAction.DOWN, 0)),
+            SteeringEvent.Key(
+                input(SteeringKey.PLAY_PAUSE, KeyAction.UP, 0, at = 1_000).copy(mediaSessionEpoch = 8),
+                track(session = 8, at = 1_000)))
+        assertTrue(fx.commands().isEmpty())
+        assertEquals(listOf(DiscardReason.SESSION_CHANGED), fx.discards())
+        assertTrue(state.idle)
+    }
+
+    @Test fun aHandoverSeenOnlyInTheReleaseSnapshotAlsoDropsTheRating() {
+        val (_, fx) = run(
+            SteeringEvent.Key(input(SteeringKey.PLAY_PAUSE, KeyAction.DOWN, 0), track("t1", 0)),
+            SteeringEvent.Key(input(SteeringKey.PLAY_PAUSE, KeyAction.UP, 0, at = 1_000), track("t1", 1_000, session = 8)))
+        assertEquals(listOf(DiscardReason.SESSION_CHANGED), fx.discards())
+    }
+
+    @Test fun twoStuckKeysStayBlockedIndependently() {
+        var state = SteeringState.initial(all)
+        val a = input(SteeringKey.NEXT, KeyAction.DOWN, 0)
+        state = reducer.reduce(state, key(a)).state
+        state = reducer.reduce(state, SteeringEvent.Timeout("stuck:${a.pressId}", t.stuckPressMs)).state
+        val b = input(SteeringKey.PREVIOUS, KeyAction.DOWN, 6_000)
+        state = reducer.reduce(state, key(b)).state
+        state = reducer.reduce(state, SteeringEvent.Timeout("stuck:${b.pressId}", 6_000 + t.stuckPressMs)).state
+
+        // The second key going stuck must not un-block the first.
+        val down = reducer.reduce(state, key(input(SteeringKey.NEXT, KeyAction.DOWN, 20_000)))
+        val up = reducer.reduce(down.state, key(input(SteeringKey.NEXT, KeyAction.UP, 20_000, at = 21_000)))
+        assertEquals(listOf(DiscardReason.RESYNC), up.effects.discards())
+    }
+
+    @Test fun theSameKeyStartingAgainIsALostRelease() {
+        val (_, fx) = run(
+            key(input(SteeringKey.NEXT, KeyAction.DOWN, 0)),
+            key(input(SteeringKey.NEXT, KeyAction.DOWN, 2_000)),
+            key(input(SteeringKey.NEXT, KeyAction.UP, 2_000, at = 3_000)))
+        // Not "another button was pressed": the previous UP simply never arrived.
+        assertEquals(listOf(DiscardReason.PRESS_SUPERSEDED, DiscardReason.RESYNC), fx.discards())
+        assertTrue(fx.commands().isEmpty())
+    }
+
+    @Test fun switchingAGestureOffMidPressAbandonsIt() {
+        val (state, fx) = run(
+            key(input(SteeringKey.NEXT, KeyAction.DOWN, 0)),
+            SteeringEvent.SetEnabled(all - Shortcut.SC01),
+            key(input(SteeringKey.NEXT, KeyAction.UP, 0, at = 1_000)))
+        assertEquals(listOf(DiscardReason.FEATURE_OFF), fx.discards())
+        assertTrue(fx.commands().isEmpty())
+        assertEquals(all - Shortcut.SC01, state.enabled)
+    }
+
+    @Test fun switchingOneOnDoesNotDisturbAPressInProgress() {
+        val (state, fx) = run(
+            key(input(SteeringKey.NEXT, KeyAction.DOWN, 0)),
+            SteeringEvent.SetEnabled(all),
+            key(input(SteeringKey.NEXT, KeyAction.UP, 0, at = 1_000)),
+            enabled = all - Shortcut.SC02)
+        assertEquals(listOf(ShortcutAction.RESET_SELECTION), fx.commands().map { it.action })
+        assertEquals(all, state.enabled)
+    }
+
     // --- §3: capability records gate everything above ---
 
     @Test fun onlyAVerifiedCapabilityIsUsable() {
@@ -291,23 +394,32 @@ class SteeringGestureReducerTest {
         assertTrue(InputCapability.LIMITED.usable)
     }
 
-    @Test fun aResultFromDifferentSoftwareHasToBeCheckedAgain() {
-        val record = CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01, InputCapability.SUPPORTED,
-            checkedAt = 1, appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9")
-        assertFalse(record.stale(51, "TQ3A", "8.9"))
-        assertTrue(record.active(userEnabled = true, appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9"))
-        assertTrue(record.stale(52, "TQ3A", "8.9"))
-        assertTrue(record.stale(51, "UP1A", "8.9"))
-        assertTrue(record.stale(51, "TQ3A", "9.0"))
-        assertFalse(record.active(true, 52, "TQ3A", "8.9"))
+    private val verified = CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01,
+        InputCapability.SUPPORTED, checkedAt = 1, appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9")
+
+    @Test fun anyChangeAsksForARecheck() {
+        assertFalse(verified.stale(51, "TQ3A", "8.9"))
+        assertTrue(verified.stale(52, "TQ3A", "8.9"))
+        assertTrue(verified.stale(51, "UP1A", "8.9"))
+        assertTrue(verified.stale(51, "TQ3A", "9.0"))
         // Never tested is not stale; it simply is not usable.
         assertFalse(CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01).stale(51, "TQ3A", "8.9"))
     }
 
+    @Test fun onlyAChangeOutsideOurControlSwitchesItOff() {
+        // versionCode moves on every PR here, so gating on it would disable the feature every
+        // release. An OS or player update can genuinely re-route the buttons.
+        assertFalse(verified.blocked("TQ3A", "8.9"))
+        assertTrue(verified.active(userEnabled = true, osBuild = "TQ3A", playerVersion = "8.9"))
+        assertTrue(verified.blocked("UP1A", "8.9"))
+        assertTrue(verified.blocked("TQ3A", "9.0"))
+        assertFalse(verified.active(true, "UP1A", "8.9"))
+    }
+
     @Test fun theUserSwitchStillHasToBeOn() {
-        val record = CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01, InputCapability.SUPPORTED,
-            appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9")
-        assertFalse(record.active(userEnabled = false, appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9"))
+        assertFalse(verified.active(userEnabled = false, osBuild = "TQ3A", playerVersion = "8.9"))
+        assertFalse(CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01)
+            .active(userEnabled = true, osBuild = "TQ3A", playerVersion = "8.9"))
     }
 
     @Test fun eachMappingIsItsOwnResult() {

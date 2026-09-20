@@ -75,13 +75,22 @@ data class CapabilityRecord(
     val playerVersion: String = "",
     val note: String = ""
 ) {
-    /** §3: a check made against different software has to be repeated before it counts. */
+    /** §3: any of the three moving means the result should be checked again, and the UI says so. */
     fun stale(appVersionCode: Int, osBuild: String, playerVersion: String) =
         capability != InputCapability.UNTESTED &&
         (this.appVersionCode != appVersionCode || this.osBuild != osBuild || this.playerVersion != playerVersion)
 
-    fun active(userEnabled: Boolean, appVersionCode: Int, osBuild: String, playerVersion: String) =
-        userEnabled && capability.usable && !stale(appVersionCode, osBuild, playerVersion)
+    /**
+     * Only a change outside our control switches the gesture off. §3 asks that a rechecked-needed
+     * state be *shown*; turning every mapping off on every app release would do that by breaking
+     * the feature, since this project bumps versionCode on every PR. An OS or player update can
+     * genuinely re-route the buttons, so those do disable it.
+     */
+    fun blocked(osBuild: String, playerVersion: String) =
+        capability != InputCapability.UNTESTED && (this.osBuild != osBuild || this.playerVersion != playerVersion)
+
+    fun active(userEnabled: Boolean, osBuild: String, playerVersion: String) =
+        userEnabled && capability.usable && !blocked(osBuild, playerVersion)
 }
 
 // --- §5: inputs, snapshots and commands ---
@@ -140,7 +149,8 @@ enum class DiscardReason(val label: String) {
     STALE_SNAPSHOT("곡 정보가 오래됨"),
     UNSUPPORTED_CONTENT("평가할 수 없는 콘텐츠"),
     TRACK_CHANGED("누르는 사이 곡이 바뀜"),
-    LONG_SECOND_PRESS("두 번째 누름이 길어 두 번 누르기가 아님")
+    LONG_SECOND_PRESS("두 번째 누름이 길어 두 번 누르기가 아님"),
+    PRESS_SUPERSEDED("이전 누름의 뗌을 받지 못함")
 }
 
 sealed interface SteeringEffect {
@@ -165,6 +175,8 @@ sealed interface SteeringEvent {
     data class Key(val input: SteeringInput, val snapshot: TrackSnapshot?) : SteeringEvent
     data class Timeout(val token: String, val atElapsed: Long) : SteeringEvent
     data class Invalidate(val reason: DiscardReason) : SteeringEvent
+    /** §8's per-gesture switches. Removing one abandons anything in flight (OFF01). */
+    data class SetEnabled(val enabled: Set<Shortcut>) : SteeringEvent
 }
 
 internal data class ActivePress(
@@ -181,6 +193,8 @@ internal data class ActivePress(
 
 internal data class PendingTap(
     val gestureId: String,
+    /** The DOWN of the first tap: the snapshot's age is measured from there, not from the second UP. */
+    val downAt: Long,
     val upAt: Long,
     val snapshot: TrackSnapshot?,
     val connectionEpoch: Long,
@@ -192,8 +206,8 @@ data class SteeringState internal constructor(
     val enabled: Set<Shortcut> = emptySet(),
     internal val press: ActivePress? = null,
     internal val pendingTap: PendingTap? = null,
-    /** After a stuck press, this key produces no further commands until one clean press passes. */
-    internal val blocked: SteeringKey? = null,
+    /** After a stuck or unreleased press, these keys produce no commands until one clean press passes. */
+    internal val blocked: Set<SteeringKey> = emptySet(),
     internal val epoch: Long = Long.MIN_VALUE
 ) {
     val idle get() = press == null && pendingTap == null
@@ -216,6 +230,16 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
         is SteeringEvent.Invalidate -> clear(state, event.reason)
         is SteeringEvent.Timeout -> timeout(state, event)
         is SteeringEvent.Key -> key(state, event)
+        is SteeringEvent.SetEnabled -> enable(state, event.enabled)
+    }
+
+    private fun enable(state: SteeringState, enabled: Set<Shortcut>): SteeringResult {
+        val removed = state.enabled - enabled
+        // OFF01: switching something off abandons a gesture that is part-way through it. Switching
+        // something on does not disturb a press already in progress.
+        if (removed.isEmpty() || state.idle) return SteeringResult(state.copy(enabled = enabled), emptyList())
+        return SteeringResult(state.copy(enabled = enabled, press = null, pendingTap = null),
+            listOf(SteeringEffect.Discard(DiscardReason.FEATURE_OFF, null)))
     }
 
     private fun clear(state: SteeringState, reason: DiscardReason): SteeringResult {
@@ -228,7 +252,7 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
             // §5.2.5: held too long. The additional command is abandoned and this key stops being
             // judged until a clean press comes through, because the UP may simply be lost.
             return SteeringResult(
-                state.copy(press = null, pendingTap = null, blocked = press.key),
+                state.copy(press = null, pendingTap = null, blocked = state.blocked + press.key),
                 listOf(SteeringEffect.Discard(DiscardReason.STUCK_PRESS, null)))
         }
         state.pendingTap?.takeIf { tapToken(it) == event.token }?.let {
@@ -247,7 +271,16 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
         // A new connection invalidates anything in flight, including the blocked-key marker.
         if (working.epoch != input.connectionEpoch) {
             if (!working.idle) effects += SteeringEffect.Discard(DiscardReason.EPOCH_CHANGED, null)
-            working = working.copy(press = null, pendingTap = null, blocked = null, epoch = input.connectionEpoch)
+            working = working.copy(press = null, pendingTap = null, blocked = emptySet(), epoch = input.connectionEpoch)
+        }
+
+        // §5.4: the playing session changing under an unfinished gesture abandons it. Both DOWN
+        // and UP carry the epoch, so this catches a handover mid-press without waiting for the
+        // coordinator to notice and send an Invalidate.
+        val inFlight = working.press?.mediaSessionEpoch ?: working.pendingTap?.mediaSessionEpoch
+        if (inFlight != null && inFlight != input.mediaSessionEpoch) {
+            effects += SteeringEffect.Discard(DiscardReason.SESSION_CHANGED, null)
+            working = working.copy(press = null, pendingTap = null)
         }
 
         if (input.canceled) {
@@ -257,7 +290,7 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
 
         return when (input.action) {
             KeyAction.DOWN -> down(working, input, event.snapshot, effects)
-            KeyAction.UP -> up(working, input, effects)
+            KeyAction.UP -> up(working, input, event.snapshot, effects)
         }
     }
 
@@ -274,8 +307,14 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
         if (working.press?.pressId == input.pressId) return SteeringResult(working, effects)
         if (input.repeatCount > 0) return SteeringResult(working, effects)
 
-        // §5.4: a different key, or a second key while one is held, abandons what was in flight.
-        if (working.press != null || (working.pendingTap != null && input.key != SteeringKey.PLAY_PAUSE)) {
+        // §5.4: a different key abandons what was in flight. The same key starting again means
+        // the previous UP never arrived, which is the lost-release case of §5.2.5 rather than a
+        // second button, so it also stops that key being judged until one clean press passes.
+        val held = working.press
+        if (held != null && held.key == input.key) {
+            effects += SteeringEffect.Discard(DiscardReason.PRESS_SUPERSEDED, null)
+            working = working.copy(press = null, pendingTap = null, blocked = working.blocked + input.key)
+        } else if (held != null || (working.pendingTap != null && input.key != SteeringKey.PLAY_PAUSE)) {
             effects += SteeringEffect.Discard(DiscardReason.OTHER_KEY, null)
             working = working.copy(press = null, pendingTap = null)
         }
@@ -285,7 +324,7 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
         if (input.baseHandlingOwner == BaseHandlingOwner.DRIVEMUSE)
             effects += SteeringEffect.DispatchBase(input.key, input.pressId)
 
-        val resync = working.blocked == input.key
+        val resync = input.key in working.blocked
         val press = ActivePress(
             input.pressId, input.key, input.downTimeElapsed, snapshot,
             input.connectionEpoch, input.mediaSessionEpoch, input.tripId, resyncOnly = resync)
@@ -294,7 +333,12 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
         return SteeringResult(working, effects)
     }
 
-    private fun up(state: SteeringState, input: SteeringInput, effects: MutableList<SteeringEffect>): SteeringResult {
+    private fun up(
+        state: SteeringState,
+        input: SteeringInput,
+        snapshot: TrackSnapshot?,
+        effects: MutableList<SteeringEffect>
+    ): SteeringResult {
         val press = state.press
         if (press == null || press.pressId != input.pressId) {
             // An UP for a press this reducer never saw the start of. Nothing to confirm.
@@ -303,15 +347,18 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
         var working = state.copy(press = null)
         val held = input.eventTimeElapsed - press.downAt
 
+        // Checked before the resync branch: a re-sync press held past the stuck threshold is not
+        // the clean press that clears the block, and letting it clear one would restore judgement
+        // on a key that is still behaving badly.
+        if (held >= thresholds.stuckPressMs) {
+            effects += SteeringEffect.Discard(DiscardReason.STUCK_PRESS, null)
+            return SteeringResult(working.copy(pendingTap = null, blocked = working.blocked + press.key), effects)
+        }
+
         if (press.resyncOnly) {
             // The clean press that re-establishes sync produces no command of its own (§5.2.5).
             effects += SteeringEffect.Discard(DiscardReason.RESYNC, null)
-            return SteeringResult(working.copy(blocked = null, pendingTap = null), effects)
-        }
-
-        if (held >= thresholds.stuckPressMs) {
-            effects += SteeringEffect.Discard(DiscardReason.STUCK_PRESS, null)
-            return SteeringResult(working.copy(pendingTap = null, blocked = press.key), effects)
+            return SteeringResult(working.copy(blocked = working.blocked - press.key, pendingTap = null), effects)
         }
 
         val long = held >= thresholds.longPressMs
@@ -324,7 +371,11 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
                 effects += SteeringEffect.Discard(DiscardReason.LONG_SECOND_PRESS, Shortcut.SC03)
                 working = working.copy(pendingTap = null)
             }
-            return SteeringResult(working, effects + confirm(Shortcut.of(press.key, Gesture.LONG_PRESS), working.enabled, press, input, press.snapshot, press.pressId))
+            // RATE01: the target stays the track seen at the first press even if the player has
+            // moved on since. Only the session changing invalidates it, which the check above and
+            // `confirm` both cover.
+            return SteeringResult(working, effects + confirm(
+                Shortcut.of(press.key, Gesture.LONG_PRESS), working.enabled, press, press.downAt, press.snapshot, snapshot, press.pressId))
         }
 
         // A short press. For PLAY_PAUSE it may open or close a double tap; for the other keys it
@@ -342,14 +393,18 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
                 effects += SteeringEffect.Discard(DiscardReason.TRACK_CHANGED, Shortcut.SC03)
                 return SteeringResult(working, effects)
             }
-            return SteeringResult(working, effects + confirm(Shortcut.SC03, working.enabled, press, input, waiting.snapshot, waiting.gestureId))
+            return SteeringResult(working, effects + confirm(
+                Shortcut.SC03, working.enabled, press, waiting.downAt, waiting.snapshot, snapshot, waiting.gestureId))
         }
 
         // First short press of a possible pair. §5.3: a third press starts a new group rather than
         // pairing with the second, which is why the candidate is replaced rather than extended.
-        val tap = PendingTap(press.pressId, input.eventTimeElapsed, press.snapshot,
+        val tap = PendingTap(press.pressId, press.downAt, input.eventTimeElapsed, press.snapshot,
             press.connectionEpoch, press.mediaSessionEpoch, press.tripId)
-        effects += SteeringEffect.ScheduleTimeout(tapToken(tap), input.eventTimeElapsed + thresholds.doubleTapGapMs)
+        // One millisecond past the gap, because the gap itself is inclusive: a second DOWN landing
+        // exactly on the boundary is a double tap, and a timer at the same instant would make the
+        // answer depend on which the queue happened to drain first.
+        effects += SteeringEffect.ScheduleTimeout(tapToken(tap), input.eventTimeElapsed + thresholds.doubleTapGapMs + 1)
         return SteeringResult(working.copy(pendingTap = tap), effects)
     }
 
@@ -357,8 +412,11 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
         shortcut: Shortcut?,
         enabled: Set<Shortcut>,
         press: ActivePress,
-        input: SteeringInput,
+        /** When the press that captured [target] went down. */
+        observedAgainst: Long,
         target: TrackSnapshot?,
+        /** What the player looked like at the release, used to notice a session handover. */
+        current: TrackSnapshot?,
         gestureId: String
     ): List<SteeringEffect> {
         if (shortcut == null) return emptyList()
@@ -369,8 +427,14 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
             val reason = when {
                 target == null -> DiscardReason.NO_TARGET_TRACK
                 !target.isSupportedContent -> DiscardReason.UNSUPPORTED_CONTENT
-                input.eventTimeElapsed - target.observedAtElapsed > thresholds.trackSnapshotMaxAgeMs -> DiscardReason.STALE_SNAPSHOT
+                // Measured from the DOWN that took it, not from the release. Measuring at release
+                // made the hold time count as staleness, so anything held beyond about two seconds
+                // was silently dropped even though the long-press window runs to five.
+                observedAgainst - target.observedAtElapsed > thresholds.trackSnapshotMaxAgeMs -> DiscardReason.STALE_SNAPSHOT
                 target.mediaSessionEpoch != press.mediaSessionEpoch -> DiscardReason.SESSION_CHANGED
+                // RATE01 keeps the first track even if the player moved on, but a different
+                // session means a different owner, and that is not the same rating any more.
+                current != null && current.mediaSessionEpoch != press.mediaSessionEpoch -> DiscardReason.SESSION_CHANGED
                 else -> null
             }
             if (reason != null) return listOf(SteeringEffect.Discard(reason, shortcut))
@@ -382,7 +446,7 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
             tripId = press.tripId,
             connectionEpoch = press.connectionEpoch,
             mediaSessionEpoch = press.mediaSessionEpoch,
-            requestedAtElapsed = input.eventTimeElapsed,
+            requestedAtElapsed = press.downAt,
             gestureConfigVersion = thresholds.version)))
     }
 
