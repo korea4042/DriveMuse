@@ -197,16 +197,23 @@ class SpotifyApi(private val auth: SpotifyAuth) {
         )
     }
 
-    /** Starts one track. Without an active device, wakes the most plausible one first. */
-    suspend fun play(trackId: String, deviceId: String? = null) {
-        val target = deviceId ?: playback()?.deviceId ?: devices().firstOrNull()?.first
-        val params = target?.let { mapOf("device_id" to it) } ?: emptyMap()
-        request("PUT", "me/player/play", params, JSONObject().put("uris", JSONArray().put("spotify:track:$trackId")))
+    /**
+     * FIX-D. Starts one track on a named device and nowhere else.
+     *
+     * The old default walked from the caller's id to whatever was active to `devices().first()`,
+     * which on a phone in a car reaches a desktop that happens to be awake. There is no field in
+     * this API that identifies the handset the app is running on — name, `type=Smartphone` and
+     * `is_active` are all guesses — so the caller must supply a device it has verified, and there
+     * is currently no way to verify one. The fallback is therefore unreachable by design rather
+     * than quietly pointed at a stranger's speakers.
+     */
+    suspend fun play(trackId: String, deviceId: String) {
+        request("PUT", "me/player/play", mapOf("device_id" to deviceId), JSONObject().put("uris", JSONArray().put("spotify:track:$trackId")))
     }
 
-    suspend fun queue(trackId: String, deviceId: String? = null) {
-        val params = buildMap { put("uri", "spotify:track:$trackId"); deviceId?.let { put("device_id", it) } }
-        request("POST", "me/player/queue", params)
+    /** Same rule as [play]: the target is named, never inferred. */
+    suspend fun queue(trackId: String, deviceId: String) {
+        request("POST", "me/player/queue", mapOf("uri" to "spotify:track:$trackId", "device_id" to deviceId))
     }
 
     suspend fun next() { request("POST", "me/player/next") }

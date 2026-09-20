@@ -476,7 +476,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
 
     /**
      * §30, PLAY01/02, QUE02: play the selected recording, confirm that it actually started, then
-     * append only the tracks that follow it in the batch. Both transports follow this same plan.
+     * append only the tracks that follow it in the batch. App Remote is the only transport (FIX-D).
      */
     fun handoff(track: Track?) {
         if (track == null) { message("재생할 곡이 없습니다"); return }
@@ -504,63 +504,45 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // Only what the app queued counts; Spotify's own autoplay never scores (§4).
             observer.plan(null, listOf(track) + following); scheduler.reset()
             val remote = runtime.spotifyRemote
-            var transport = "App Remote"
             val connectFailure = remote.connect(getApplication())
             val start = if (connectFailure != null) ai.drivemuse.app.spotify.StartResult.Failed(connectFailure)
                         else remote.playAndConfirm(track.id)
             when (start) {
                 is ai.drivemuse.app.spotify.StartResult.Confirmed -> Unit
-                // R01: only a definitive refusal justifies sending the same play down another pipe.
+                // FIX-D: the Web API fallback is gone. Choosing a target used to fall through to
+                // the first device in the list, which on a phone in a car reaches a desktop that
+                // happens to be awake, and nothing in that API identifies this handset. Without a
+                // device we can verify, App Remote is the only transport this build supports.
                 is ai.drivemuse.app.spotify.StartResult.Failed -> {
-                    transport = "Web API"
-                    val web = runCatching { runtime.spotify.play(track.id) }
-                    if (!(web.isSuccess && confirmViaWebApi(track.id))) {
-                        message(start.reason + (web.exceptionOrNull()?.let { " · Web API: ${it.message}" } ?: " · Web API: 시작 확인 실패"))
-                        return@withTimeoutOrNull false
-                    }
+                    message(start.reason + " · 이 버전은 휴대전화의 Spotify 앱을 통해서만 재생해요")
+                    return@withTimeoutOrNull false
                 }
-                // The command may already be playing. Re-sending it would restart the track, so
-                // look at the player once more and report an unclear state rather than act on it.
+                // The command may already be playing. Re-sending it would restart the track.
                 is ai.drivemuse.app.spotify.StartResult.Indeterminate -> {
-                    if (!confirmViaWebApi(track.id)) {
-                        message(start.reason + " · 명령 결과가 불명확해 같은 곡을 다시 보내지 않았어요. Spotify 앱 상태를 확인해 주세요")
-                        return@withTimeoutOrNull false
-                    }
+                    message(start.reason + " · 명령 결과가 불명확해 같은 곡을 다시 보내지 않았어요. Spotify 앱 상태를 확인해 주세요")
+                    return@withTimeoutOrNull false
                 }
             }
             // Exposure only (§17 EXPOSED_ONLY); the listening outcome comes from observation.
             if (!ui.value.demo) repository.recordPlay(track.id)
             var queued = 0
             var unclear = 0
-            for (next in following) {
-                if (transport == "App Remote") when (remote.queue(next.id)) {
-                    is ai.drivemuse.app.spotify.DispatchResult.Accepted -> queued++
-                    // Re-queueing on Unknown is how the same track lands twice (§7).
-                    is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
-                    is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
-                } else if (runCatching { runtime.spotify.queue(next.id) }.isSuccess) queued++
+            for (next in following) when (remote.queue(next.id)) {
+                is ai.drivemuse.app.spotify.DispatchResult.Accepted -> queued++
+                // Re-queueing on Unknown is how the same track lands twice (§7).
+                is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
+                is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
             }
             // R09: the request was not the recovery. A confirmed start of the intended recording
             // is. On failure or an unclear result the app stays out of the queue.
             regainControl()
             refreshListening()
             message("${track.artist} ${track.title} 재생 시작" +
-                (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기" + (if (unclear > 0) " · ${unclear}곡 결과 불명" else "")) +
-                " ($transport)")
+                (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기" + (if (unclear > 0) " · ${unclear}곡 결과 불명" else "")))
             true
           }
           if (finished == null) message("재생 요청이 60초 안에 끝나지 않아 중단했어요. Spotify 앱 상태를 확인해 주세요")
         }
-    }
-
-    /** Polls /me/player briefly until the requested track is the current one. */
-    private suspend fun confirmViaWebApi(trackId: String): Boolean {
-        repeat(5) {
-            val state = runCatching { runtime.spotify.playback() }.getOrNull()
-            if (state?.trackId == trackId && state.playing) return true
-            kotlinx.coroutines.delay(1500)
-        }
-        return false
     }
 
     fun parseRule(text: String) {

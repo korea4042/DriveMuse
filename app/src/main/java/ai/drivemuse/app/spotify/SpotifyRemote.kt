@@ -19,7 +19,14 @@ import kotlin.coroutines.resume
 /** What the Spotify player is doing, as App Remote reports it. */
 data class RemotePlayerState(
     val trackUri: String?, val title: String?, val artist: String?,
-    val paused: Boolean, val positionMs: Long, val durationMs: Long, val observedAt: Long
+    val paused: Boolean, val positionMs: Long, val durationMs: Long, val observedAt: Long,
+    /**
+     * Monotonic per callback. Wall-clock time cannot order two states that arrive in the same
+     * millisecond, and confirming a start needs to know an observation came after the command.
+     */
+    val sequence: Long = 0,
+    /** Which connection produced it: state from a dropped session says nothing about this one. */
+    val connectionEpoch: Long = 0
 ) {
     val trackId get() = trackUri?.substringAfterLast(':')
 }
@@ -61,6 +68,9 @@ class SpotifyRemote(private val clientId: () -> String?) {
     @Volatile private var remote: SpotifyAppRemote? = null
     private val stateMutable = MutableStateFlow<RemotePlayerState?>(null)
     val state = stateMutable.asStateFlow()
+    private val sequenceValue = java.util.concurrent.atomic.AtomicLong(0)
+    @Volatile private var connectionEpochValue = 0L
+    val connectionEpoch get() = connectionEpochValue
 
     val connected get() = remote?.isConnected == true
 
@@ -88,12 +98,16 @@ class SpotifyRemote(private val clientId: () -> String?) {
         } ?: return "Spotify 앱이 20초 안에 응답하지 않았어요. Spotify를 한 번 열어 로그인 상태를 확인한 뒤 다시 시도해 주세요"
         val connectedRemote = result.first ?: return result.second
         remote = connectedRemote
+        // A new connection invalidates everything the old one reported.
+        val epoch = ++connectionEpochValue
+        stateMutable.value = null
         connectedRemote.playerApi.subscribeToPlayerState().setEventCallback { s ->
             val t = s.track
             stateMutable.value = RemotePlayerState(
                 trackUri = t?.uri, title = t?.name, artist = t?.artist?.name,
                 paused = s.isPaused, positionMs = s.playbackPosition,
-                durationMs = t?.duration ?: 0L, observedAt = System.currentTimeMillis()
+                durationMs = t?.duration ?: 0L, observedAt = System.currentTimeMillis(),
+                sequence = sequenceValue.incrementAndGet(), connectionEpoch = epoch
             )
         }
         null
@@ -116,7 +130,13 @@ class SpotifyRemote(private val clientId: () -> String?) {
         return "$hint ($kind)"
     }
 
-    fun disconnect() { remote?.let { SpotifyAppRemote.disconnect(it) }; remote = null; stateMutable.value = null }
+    fun disconnect() {
+        remote?.let { SpotifyAppRemote.disconnect(it) }
+        remote = null
+        // Stale state must not outlive its connection and confirm a later command.
+        connectionEpochValue++
+        stateMutable.value = null
+    }
 
     /**
      * R01. The previous version resumed with `null` on success and then applied `?:` to the
@@ -129,9 +149,21 @@ class SpotifyRemote(private val clientId: () -> String?) {
         withTimeoutOrNull(timeoutMs) {
             suspendCancellableCoroutine<DispatchResult> { cont ->
                 call.setResultCallback { if (cont.isActive) cont.resume(DispatchResult.Accepted) }
-                call.setErrorCallback { e -> if (cont.isActive) cont.resume(DispatchResult.Rejected(explain(e))) }
+                call.setErrorCallback { e -> if (cont.isActive) cont.resume(classify(e)) }
             }
         } ?: DispatchResult.Unknown
+
+    /**
+     * FIX-D. Treating every error as Rejected made a dropped connection look like a refusal, and a
+     * refusal is the one thing that licenses re-sending the command elsewhere. A command that was
+     * in flight when the transport died may well have landed, so it is Unknown.
+     */
+    private fun classify(error: Throwable): DispatchResult {
+        val kind = error::class.simpleName ?: "Unknown"
+        val indeterminate = "SpotifyDisconnected" in kind || "SpotifyConnectionTerminated" in kind ||
+            "SpotifyRemoteService" in kind || "Offline" in kind || "Timeout" in kind
+        return if (indeterminate) DispatchResult.Unknown else DispatchResult.Rejected(explain(error))
+    }
 
     /**
      * Starts one recording and returns null only once the player reports that track as the current
@@ -141,6 +173,11 @@ class SpotifyRemote(private val clientId: () -> String?) {
     suspend fun playAndConfirm(trackId: String, confirmMs: Long = 10_000): StartResult {
         val api = remote?.takeIf { it.isConnected }?.playerApi
             ?: return StartResult.Failed("Spotify에 연결되지 않았어요")
+        // FIX-D: everything observed before this point describes the player as it was, including a
+        // state that already showed this recording. Confirmation needs an observation newer than
+        // the command, otherwise restarting a track that was already playing "succeeds" instantly.
+        val watermark = stateMutable.value?.sequence ?: 0L
+        val epoch = connectionEpoch
         // A rejection is the only outcome that proves the command did not land. On Unknown the
         // player may well be starting the track right now, so the state stream decides.
         when (val sent = dispatch(api.play("spotify:track:$trackId"))) {
@@ -148,7 +185,9 @@ class SpotifyRemote(private val clientId: () -> String?) {
             else -> Unit
         }
         val started = withTimeoutOrNull(confirmMs) {
-            state.filterNotNull().first { it.trackId == trackId && !it.paused }
+            state.filterNotNull().first {
+                it.trackId == trackId && !it.paused && it.sequence > watermark && it.connectionEpoch == epoch
+            }
         }
         return when {
             started != null -> StartResult.Confirmed
