@@ -275,7 +275,7 @@ abstract class DriveDatabase: RoomDatabase() {
          * makes Room's schema validation fail on the next open. Existing rows keep seq 0, which is
          * correct because the old key allowed at most one row per (sessionId, generation).
          */
-        private val MIGRATION_7_8 = object : Migration(7,8) {
+        val MIGRATION_7_8 = object : Migration(7,8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `batches_new` (`id` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `generation` INTEGER NOT NULL, `profileVersion` INTEGER NOT NULL, `contextVersion` INTEGER NOT NULL, `evidenceVersion` INTEGER NOT NULL, `candidateSetId` TEXT NOT NULL, `status` TEXT NOT NULL, `json` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `batchSeq` INTEGER NOT NULL, PRIMARY KEY(`id`))")
                 db.execSQL("INSERT INTO `batches_new` (`id`, `sessionId`, `generation`, `profileVersion`, `contextVersion`, `evidenceVersion`, `candidateSetId`, `status`, `json`, `createdAt`, `batchSeq`) SELECT `id`, `sessionId`, `generation`, `profileVersion`, `contextVersion`, `evidenceVersion`, `candidateSetId`, `status`, `json`, `createdAt`, 0 FROM `batches`")

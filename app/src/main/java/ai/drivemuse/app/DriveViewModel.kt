@@ -66,11 +66,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private suspend fun touchSession() {
         val previous=sessionId
         runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } }
-        if(sessionId!=previous) {
-            offered.clear()
-            // R09: a new drive session is the other defined way control comes back.
-            regainControl()
-        }
+        // A new session clears the re-roll memory. It deliberately does not clear controlLost:
+        // the id rolls over on an inactivity timer, and a timer must not hand the queue back.
+        if(sessionId!=previous) offered.clear()
     }
     private var firstMoodSession: String?=null
     private var progress=DiscoveryProgress()
@@ -374,10 +372,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 offered.addAll(queue.map { it.id })
                 if(append) appendToPlayer(carried,queue)
                 val shortfall=direct?.takeIf { it.short }
+                // Direct-input mode does not read the genre-approximated energy, so a quiet/lively
+                // rule has nothing to act on. Dropping it silently would misreport the user's own
+                // rule as applied.
+                val energyRuleUnapplied=direct!=null && effective.energyCeiling<1.0
                 mutable.update { it.copy(queue=if(append) carried+queue else queue,queueStale=false,engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
                 // Say the pool is short rather than padding it out of the scored ranking.
                 if(shortfall!=null && !append) message("조건을 통과한 후보가 ${shortfall.eligible}곡이라 ${queue.size}곡만 준비했어요. 제외 조건을 확인하거나 후보를 더 불러와 주세요")
+                else if(energyRuleUnapplied && !append) message("직접 입력 모드에서는 ‘잔잔하게’ 같은 세기 규칙을 적용할 수 없어요. 이 곡들은 규칙을 반영하지 않았습니다")
             } catch (e: CancellationException) { throw e }
               catch (e: Exception) { if(!append) message(explain(e)) }
             finally { if(!append && generation == selectionGeneration) mutable.update { it.copy(busy=false) } }
@@ -449,7 +452,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         message("목록에 없는 곡이 재생돼 자동 선곡을 멈췄어요. 목록에서 곡을 선택하면 다시 시작합니다")
     }
 
-    /** The driver asked for playback or a new session began: automation may own the queue again. */
+    /**
+     * Called only after the intended recording is confirmed playing. Asking is not regaining: if
+     * the start failed or its result was unclear, the app does not know what is in the queue and
+     * has no business filling it.
+     */
     private suspend fun regainControl() {
         // Read the store rather than the StateFlow: this runs during init, before the flow has
         // necessarily emitted, and a stale `false` there would silently keep the stop in place.
@@ -485,8 +492,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             message("Spotify에 연결하는 중…")
             // Before plan(), so the close of the attempt now ending carries the command that caused it.
             if (markSkip) observer.commandedSkip()
-            // Asking to play is the driver taking the wheel back (R09).
-            regainControl()
             // Registered before the command so the very first callback for this track is observed.
             // Only what the app queued counts; Spotify's own autoplay never scores (§4).
             observer.plan(null, listOf(track) + following); scheduler.reset()
@@ -527,6 +532,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                     is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
                 } else if (runCatching { runtime.spotify.queue(next.id) }.isSuccess) queued++
             }
+            // R09: the request was not the recovery. A confirmed start of the intended recording
+            // is. On failure or an unclear result the app stays out of the queue.
+            regainControl()
             refreshListening()
             message("${track.artist} ${track.title} 재생 시작" +
                 (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기" + (if (unclear > 0) " · ${unclear}곡 결과 불명" else "")) +

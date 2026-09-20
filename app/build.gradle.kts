@@ -9,6 +9,7 @@ android {
         buildConfigField("String", "YT_API_KEY", quoted(providers.gradleProperty("ytApiKey").orNull ?: ""))
         buildConfigField("String", "GEMINI_MODEL", quoted(providers.gradleProperty("geminiModel").orNull ?: ""))
         buildConfigField("String", "WEATHER_API_KEY", quoted(providers.gradleProperty("weatherApiKey").orNull ?: ""))
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Stable debug signature so one OAuth SHA-1 registration keeps working across CI and local builds.
     // drivemuse.keystore is a throwaway TEST key committed on purpose; never ship a release signed with it.
@@ -53,4 +54,10 @@ dependencies {
     // Spotify App Remote ships as an AAR download rather than through Maven; gson is its transport.
     implementation(files("libs/spotify-app-remote-release-0.8.0.aar"))
     implementation("com.google.code.gson:gson:2.11.0")
+    // Room migration 7->8 rewrites a table existing installs already have rows in, so the upgrade
+    // is validated against the exported schema on a real SQLite engine.
+    androidTestImplementation("androidx.room:room-testing:2.7.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation(kotlin("test-junit"))
 }
