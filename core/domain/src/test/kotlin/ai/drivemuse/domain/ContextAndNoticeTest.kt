@@ -78,6 +78,36 @@ class ContextAndNoticeTest {
         assertFalse(out.capRelaxed)
     }
 
+    // --- §3/§7: reuse is not a refresh, and a surviving pool is not a successful one ---
+
+    @Test fun reusingAHeldForecastIsNotARefresh() {
+        assertEquals(ContextRefresh.REFRESHED, ContextRefresh.of(hasUsableFact = true, fetchedAtChanged = true))
+        assertEquals(ContextRefresh.REUSED, ContextRefresh.of(hasUsableFact = true, fetchedAtChanged = false))
+        assertEquals(ContextRefresh.NONE, ContextRefresh.of(hasUsableFact = false, fetchedAtChanged = false))
+        assertFalse(ContextRefresh.REUSED.refreshed)
+        // The cache is also served when the throttle holds, so reuse on its own names no cause.
+        assertFalse("확인하지 못해" in ContextRefresh.REUSED.describe())
+        assertEquals(ContextRefresh.REUSED.detail, ContextRefresh.REUSED.describe(null))
+        assertTrue(LocationStatus.DISABLED.advice in ContextRefresh.REUSED.describe(LocationStatus.DISABLED.advice))
+        // A cause is only ever attached to a reuse.
+        assertEquals(ContextRefresh.REFRESHED.detail, ContextRefresh.REFRESHED.describe(LocationStatus.DISABLED.advice))
+        assertTrue(ContextRefresh.values().distinctBy { it.detail }.size == 3)
+    }
+
+    @Test fun aFailedPoolRefreshIsAFailureHoweverManyCandidatesSurvived() {
+        val failed = PoolRefresh.of(before = 120, after = 120, failure = "조회 실패")
+        assertTrue(failed is PoolRefresh.Failed)
+        assertTrue("기존 120곡" in (failed as PoolRefresh.Failed).detail)
+    }
+
+    @Test fun aRefreshThatAddedNothingStillSaysSo() {
+        val none = PoolRefresh.of(before = 120, after = 120, failure = null) as PoolRefresh.Refreshed
+        assertEquals(0, none.added)
+        assertTrue("새로 추가된 곡 없음" in none.detail)
+        val some = PoolRefresh.of(before = 120, after = 150, failure = null) as PoolRefresh.Refreshed
+        assertEquals(30, some.added)
+    }
+
     // --- §7: a failure says which failure ---
 
     @Test fun everyFailureCarriesSomethingToDo() {

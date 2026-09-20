@@ -76,6 +76,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val observer=PlaybackObserver(db,learning,{ sessionId },System::currentTimeMillis,
         { id,ordinal,size -> onPlannedStart(id,ordinal,size) },
         { id -> onUnplannedPlayback(id) })
+    /**
+     * §3: one entry per control, so two buttons cannot overwrite each other's progress and a
+     * settled result stays readable after the snackbar has gone.
+     */
+    private val operations=OperationRegistry(viewModelScope,{ e -> explain(e) })
+    val operationStates=operations.flow
+    fun cancelOperation(target: String) = operations.cancel(target)
+    fun dismissOperation(target: String) = operations.dismiss(target)
     private val location=LocationAdapter(application)
     private val weather=WeatherRepository()
     private var region: Region?=null
@@ -140,6 +148,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         viewModelScope.launch {
             for(edit in edits) { surveyBusyMutable.value=true;try { edit() } catch(e: CancellationException) { throw e } catch(e: Exception) { message(explain(e)) } finally { surveyBusyMutable.value=false } }
         }
+        // §3: the bottom notice is auxiliary. The authoritative state lives next to the control
+        // that started the work; this only keeps the old global line honest.
+        viewModelScope.launch {
+            operations.flow.collect { ops -> mutable.update { it.copy(working=ops.values.firstOrNull { o -> o.running }?.kind?.verb?.plus("…")) } }
+        }
         viewModelScope.launch {
             // FIX-A: the observer is not collecting yet, so nothing can write a new implicit row
             // between the purge and the restart.
@@ -183,11 +196,16 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
     fun refreshWeather() {
         if(ui.value.driving) return
-        contextJob?.cancel();contextJob=viewModelScope.launch { working("위치와 날씨를 확인하는 중…") {
+        contextJob?.cancel();contextJob=operations.start(OperationKind.CONTEXT,OperationRegistry.CONTEXT) { op ->
+            op.stage(OperationStage.CONNECTING)
+            // The repository serves its cache while the five-minute throttle holds, and that cache
+            // is identical to a fresh answer in every field but this one.
+            val fetchedBefore=weatherFact?.fetchedAt
             val outcome=location.refresh()
             region=outcome.region ?: location.lastKnown()
             // A failed fix does not invalidate a forecast already held for the same region: the
             // two have separate lifetimes (§4). Only a region we actually have can be looked up.
+            op.stage(OperationStage.PREPARING)
             outcome.region?.let { weatherFact=weather.get(it) }
             locationStatusMutable.value=outcome.status
             contextVersion++
@@ -199,12 +217,18 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "${fact.source} · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"}${if(fact.stale(now)) " · 오래된 관측" else ""}",
                 weatherDetail=if(fact==null) "날씨 없음 · 지역 ${region?.id ?: "미확인"}"
                     else "출처 ${fact.source} · 지역 ${fact.region} · 관측 ${clock(fact.observedAt)} · 조회 ${clock(fact.fetchedAt)} · ${if(fact.stale(now)) "오래된 관측" else "최신"}") }
-            message(when {
-                fact!=null && outcome.status==LocationStatus.AVAILABLE -> "날씨를 갱신했습니다"
-                fact!=null -> "위치를 새로 확인하지 못해 직전 지역의 날씨를 그대로 사용합니다"
-                else -> outcome.status.advice.ifBlank { "날씨를 가져오지 못했어요. 기본 상황으로 추천합니다" }
-            })
-        } }
+            val refresh=ContextRefresh.of(fact!=null,fact!=null && fact.fetchedAt!=fetchedBefore)
+            // Only a position failure the app observed is named as the cause; a reuse caused by
+            // the lookup throttle gets the plain sentence.
+            val described=refresh.describe(outcome.status.takeIf { it!=LocationStatus.AVAILABLE }?.advice)
+            message(described)
+            when(refresh) {
+                ContextRefresh.REFRESHED, ContextRefresh.REUSED -> op.confirm(described)
+                // There is something actionable to say here, so it is a failure with advice, not a
+                // success that happens to have no weather in it.
+                ContextRefresh.NONE -> error(outcome.status.advice.ifBlank { refresh.detail })
+            }
+        }
     }
     /** Registered zones, so the screen shows whether saving actually worked (§24). */
     private val zonesMutable = MutableStateFlow(emptySet<Zone>())
@@ -213,8 +237,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val poolMutable = MutableStateFlow("후보 확인 전")
     val poolStatus = poolMutable.asStateFlow()
     fun refreshPool() {
-        if(ui.value.working!=null) { message("이미 처리 중이에요"); return }
-        viewModelScope.launch { working("후보를 불러오는 중…") {
+        if(operations.start(OperationKind.POOL,OperationRegistry.POOL) { op ->
+            op.stage(OperationStage.CONNECTING)
             // Name what each Spotify source returned; "pool empty" alone never says which step failed.
             // Name every precondition separately. "Spotify가 안 돼요" is usually one of four
             // different things, and a single pass/fail hides which.
@@ -244,15 +268,26 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 onFailure = { "후보 ${after}곡 · $probe · 실패: " + (it.message ?: it::class.simpleName) }
             )
             message(poolMutable.value)
-        } }
+            // The count is what survived, not what this refresh achieved. Confirming on the count
+            // reported a failed refresh as a success whenever the old pool was still there.
+            when(val result = PoolRefresh.of(before, after, outcome.exceptionOrNull()?.let { it.message ?: it::class.simpleName ?: "조회 실패" })) {
+                is PoolRefresh.Refreshed -> op.confirm(result.detail)
+                is PoolRefresh.Failed -> error(result.detail)
+            }
+        }==null) message("이미 처리 중이에요")
     }
     fun refreshZones() { zonesMutable.value = runCatching { location.registeredZones() }.getOrDefault(emptySet()) }
-    fun registerZone(zone: Zone) { if(ui.value.driving) return;contextJob?.cancel();contextJob=viewModelScope.launch { working("현재 위치를 확인하는 중…") {
-        val status = location.register(zone)
-        refreshZones()
-        message(if(status==LocationStatus.AVAILABLE) "${if (zone == Zone.HOME) "집" else "회사"}을(를) 등록했습니다"
-                else "등록하지 못했어요 · ${status.advice}")
-    } } }
+    fun registerZone(zone: Zone) { if(ui.value.driving) return;contextJob?.cancel()
+        contextJob=operations.start(OperationKind.LOCATION,OperationRegistry.zone(zone.name)) { op ->
+            op.stage(OperationStage.CONNECTING)
+            val status = location.register(zone)
+            refreshZones()
+            val where = if (zone == Zone.HOME) "집" else "회사"
+            // UX03: the confirmation is the stored zone coming back, not the call returning.
+            if(status==LocationStatus.AVAILABLE && zone in location.registeredZones()) op.confirm("${where}을(를) 등록했어요")
+            else error("등록하지 못했어요 · ${status.advice}")
+        }
+    }
     fun deleteZones() { if(ui.value.driving) return;contextJob?.cancel();location.deleteZones();region=null;weatherFact=null;weather.clear();contextVersion++;cancelSelection();viewModelScope.launch { coordinator.invalidate() };message("등록 영역을 삭제했습니다") }
     fun rate(track: Track, positive: Boolean) {
         if(ui.value.driving || ui.value.demo) return
@@ -306,15 +341,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
     fun message(text: String?) { mutable.update { it.copy(message=text) } }
 
-    /**
-     * Runs [block] with [label] on screen and clears it afterwards, whatever happens. Every action
-     * that can take more than an instant goes through this, so "did my tap register" stops being a
-     * question the user has to answer by waiting.
-     */
-    private suspend fun <T> working(label: String, block: suspend () -> T): T {
-        mutable.update { it.copy(working=label) }
-        try { return block() } finally { mutable.update { it.copy(working=null) } }
-    }
     fun onboard(demo: Boolean) { viewModelScope.launch { prefs.flag("onboarded",true); mutable.update { it.copy(demo=demo,context=if(demo) DriveContext.COMMUTE_HOME else DriveContext.GENERAL_DRIVE) }; if (demo) recommend() } }
     fun demo(value: Boolean) { cancelSelection();progress=DiscoveryProgress(); mutable.update { it.copy(demo=value,queue=emptyList(),notices=emptyList(),connection=if(value) "데모 · 계정 미연결" else connectionLabel(settings.value)) } }
     fun driving(value: Boolean) { if(value) { cancelSelection();contextJob?.cancel() }; mutable.update { it.copy(driving=value,page="홈") } }
@@ -361,7 +387,20 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if(ui.value.driving) { message("정차 후 선곡을 시작해 주세요"); return }
         cancelSelection()
         val generation = selectionGeneration
-        selectionJob = viewModelScope.launch { runSelection(generation, append = false, baseRevision = null) }
+        // UX03: the operation only reports success once a batch has actually been committed.
+        // A stale generation settles as UNKNOWN, which is what it is: the conditions moved while
+        // the request was in the air and nobody can say what the user would have got.
+        selectionJob = operations.start(OperationKind.SELECTION,OperationRegistry.SELECTION) { op ->
+            op.stage(OperationStage.PREPARING)
+            when(val outcome = runSelection(generation, append = false, baseRevision = null)) {
+                PrepareOutcome.Prepared -> op.confirm("${ui.value.queue.size}곡을 준비했어요")
+                is PrepareOutcome.RetryableFailure -> error(outcome.reason)
+                is PrepareOutcome.Exhausted -> error(outcome.reason)
+                // Every branch is stated. SELECTION requires confirmation, so a branch that
+                // forgot to say what happened would settle UNKNOWN rather than quietly succeed.
+                PrepareOutcome.Stale -> op.discard("조건이 바뀌어 이번 결과는 적용하지 않았어요 · 다시 골라 주세요")
+            }
+        }
     }
 
     /**
@@ -752,6 +791,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun resetAll() {
         if(ui.value.driving) return
         cancelSelection();accountJob?.cancel();surveyJob?.cancel();contextJob?.cancel();engine.clearCache()
-        edits.trySend { working("앱을 초기화하는 중…") { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearState();prefs.clear();observer.release();listeningMutable.value=ListeningSummary();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() };message("앱을 초기화했습니다") }
+        edits.trySend { operations.run(OperationKind.RESET,OperationRegistry.RESET) { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearState();prefs.clear();observer.release();listeningMutable.value=ListeningSummary();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() };message("앱을 초기화했습니다") }
     }
 }

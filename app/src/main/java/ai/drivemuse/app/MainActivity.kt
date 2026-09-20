@@ -140,6 +140,11 @@ class MainActivity: ComponentActivity() {
                         DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else if(ui.needsReselect) "조건이 바뀌었어요 · 다시 고르기" else "Spotify에서 재생",!ui.busy) {
                             if(ui.queue.isEmpty() || ui.needsReselect) vm.recommend() else if(ui.demo) vm.message("샘플 곡입니다. 설정에서 데모 모드를 끄고 Google 계정을 연결해 주세요") else vm.handoff(ui.queue.first())
                         }
+                        // §3: the state of this button's work, next to this button.
+                        OperationStatus(rememberOperation(vm,OperationRegistry.SELECTION),
+                            onCancel={ vm.cancelOperation(OperationRegistry.SELECTION) },
+                            onDismiss={ vm.dismissOperation(OperationRegistry.SELECTION) },
+                            onRetry={ vm.recommend() })
                         if(ui.queue.isNotEmpty()) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { TextButton(onClick={ vm.recommend() }) { Text("다른 믹스 고르기") }; if(!ui.demo) TextButton(onClick={ vm.skipCurrent() }) { Text("다음 곡으로") } }
                         Text("재생과 차량 디스플레이는 Spotify가 담당해요.",fontSize=11.sp,color=DriveColors.Muted)
                     } }
