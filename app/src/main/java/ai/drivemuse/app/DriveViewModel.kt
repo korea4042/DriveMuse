@@ -42,6 +42,9 @@ data class UiState(
         else -> null
     }
 }
+/** Candidate pool had nothing eligible. Distinct from a network or database failure (FIX-C). */
+private class PoolExhausted(message: String): IllegalStateException(message)
+
 class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val prefs = Preferences(application)
     private val db=DriveDatabase.get(application)
@@ -55,7 +58,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val learning=LearningStore(db)
     // Phase 1 §4/§6: the App Remote stream finally has a consumer, so listening becomes evidence
     // and the last track of a batch triggers the next one.
-    private val scheduler=NextBatchScheduler { base -> prepareNextBatch(base) }
+    private val scheduler=NextBatchScheduler({ base -> prepareNextBatch(base) }, viewModelScope)
     private val observer=PlaybackObserver(db,learning,{ sessionId },System::currentTimeMillis,
         { id,ordinal,size -> scheduler.onStarted(id,ordinal,size) },
         { id -> onUnplannedPlayback(id) })
@@ -304,25 +307,26 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * queue before the current track ends. Unlike the manual path this runs while driving: the
      * driver asked for nothing, which is the whole point.
      */
-    private suspend fun prepareNextBatch(baseRevision: Long) {
-        if(survey.value?.completed!=true || ui.value.demo || !spotifyLinked) return
-        if(settings.value.suspendedUntil>System.currentTimeMillis()) return
+    private suspend fun prepareNextBatch(baseRevision: Long): PrepareOutcome {
+        if(survey.value?.completed!=true || ui.value.demo || !spotifyLinked) return PrepareOutcome.Stale
+        if(settings.value.suspendedUntil>System.currentTimeMillis()) return PrepareOutcome.Stale
         // R09: automation does not resume on its own after losing the queue.
-        if(settings.value.controlLost) return
-        runSelection(selectionGeneration, append = true, baseRevision = baseRevision)
+        if(settings.value.controlLost) return PrepareOutcome.Stale
+        return runSelection(selectionGeneration, append = true, baseRevision = baseRevision)
     }
 
-    private suspend fun runSelection(generation: Int, append: Boolean, baseRevision: Long?) {
+    private suspend fun runSelection(generation: Int, append: Boolean, baseRevision: Long?): PrepareOutcome {
             touchSession()
             if(!append) mutable.update { it.copy(busy=true) }
             val snapshot = ui.value
-            val draft=survey.value?:return
+            val draft=survey.value?:return PrepareOutcome.Stale
             val revision=draft.revision
             // Appending must not repeat what is already queued or still playing. A manual re-roll
             // must not repeat what this session has already been offered, or it is not a re-roll.
             var excluded = if(append) snapshot.queue.map { it.id }.toSet()
                 else synchronized(offered) { offered.toSet() } + snapshot.queue.map { it.id }
             val carried = if(append) snapshot.queue.takeLast(Policy.BATCH_SIZE) else emptyList()
+            val capturedEpoch = controlEpoch.current
             try {
                 val config = prefs.flow.first()
                 val ruleSnapshot = dao.rules().first().map { it.domain() }
@@ -362,7 +366,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                             refilled.isEmpty() -> "Spotify에서 가져온 후보가 없어요 · " + (report?.describe() ?: "조회 실패")
                             else -> "후보 ${refilled.size}곡이 모두 확인된 제외 조건에 걸렸어요. 설문의 제외 장르를 확인해 주세요"
                         }
-                        error(reason)
+                        throw PoolExhausted(reason)
                     }
                 }
                 val direct=if(Policy.DIRECT_INPUT_ONLY) DirectInputSelector.select(prepared,constraints,sessionId,excluded) else null
@@ -378,7 +382,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val novelty=if(snapshot.demo || !Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) emptyMap() else runCatching { ai.drivemuse.app.catalog.NoveltyAnnotator(db.catalog()).annotate(prepared,emptySet(),runtime.historyCoverageSince()) }.getOrDefault(emptyMap())
                 val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,(0 until Policy.BATCH_SIZE).toList(),novelty,MixTarget.resolve(p))
                 val queue=selection.tracks
-                if(generation!=selectionGeneration || survey.value?.revision!=revision) return
+                if(generation!=selectionGeneration || survey.value?.revision!=revision) return PrepareOutcome.Stale
                 // Saying "adjust your rules" is wrong when the pool itself is empty, which is the
                 // common case right after switching providers.
                 check(queue.isNotEmpty()) {
@@ -389,10 +393,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                         else -> "후보 ${pool}곡 중 조건을 통과한 곡이 없습니다. 규칙과 제외 조건을 확인해 주세요"
                     }
                 }
-                if(!snapshot.demo && !coordinator.commit(version,queue,prepared,constraints)) return
-                if(generation!=selectionGeneration || survey.value?.revision!=revision) return
-                // T22: a proposal built on a queue revision that has since moved is discarded whole.
-                if(append && !scheduler.accepts(baseRevision!!)) return
+                // FIX-C: the revision and epoch are checked BEFORE the commit, not after it. The
+                // old order stored a plan built on a queue that had already moved and only then
+                // noticed, leaving a READY row nobody wanted.
+                if(append && !scheduler.accepts(baseRevision!!)) return PrepareOutcome.Stale
+                if(append && !controlEpoch.stillCurrent(capturedEpoch)) return PrepareOutcome.Stale
+                if(generation!=selectionGeneration || survey.value?.revision!=revision) return PrepareOutcome.Stale
+                if(!snapshot.demo && !coordinator.commit(version,queue,prepared,constraints)) return PrepareOutcome.Stale
+                if(append && !scheduler.accepts(baseRevision!!)) return PrepareOutcome.Stale
                 progress=progress.append(queue)
                 offered.addAll(queue.map { it.id })
                 if(append) appendToPlayer(carried,queue)
@@ -406,8 +414,14 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 // Say the pool is short rather than padding it out of the scored ranking.
                 if(shortfall!=null && !append) message("조건을 통과한 후보가 ${shortfall.eligible}곡이라 ${queue.size}곡만 준비했어요. 제외 조건을 확인하거나 후보를 더 불러와 주세요")
                 else if(energyRuleUnapplied && !append) message("직접 입력 모드에서는 ‘잔잔하게’ 같은 세기 규칙을 적용할 수 없어요. 이 곡들은 규칙을 반영하지 않았습니다")
+                return PrepareOutcome.Prepared
             } catch (e: CancellationException) { throw e }
-              catch (e: Exception) { if(!append) message(explain(e)) }
+              catch (e: Exception) {
+                // FIX-C: the append path used to swallow this entirely, so a failing automatic
+                // top-up looked exactly like a working one.
+                message(explain(e))
+                return PrepareOutcome.RetryableFailure(e.message ?: e::class.simpleName ?: "알 수 없는 오류")
+            }
             finally { if(!append && generation == selectionGeneration) mutable.update { it.copy(busy=false) } }
     }
 
