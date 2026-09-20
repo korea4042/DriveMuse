@@ -61,6 +61,14 @@ class OperationRegistry(
     private val mutable = MutableStateFlow<Map<String, Operation>>(emptyMap())
     val flow = mutable.asStateFlow()
     private val jobs = ConcurrentHashMap<String, Job>()
+    /**
+     * How to run each target's outstanding operation again, recorded when it starts.
+     *
+     * Kept here rather than in the composable that pressed the button: a screen's remembered state
+     * is gone the moment the user navigates away, so a failed delete came back as a retry that
+     * would have run a save. The operation outlives the screen and so must the way to repeat it.
+     */
+    private val retries = ConcurrentHashMap<String, () -> Unit>()
 
     fun of(target: String): Operation? = mutable.value[target]
     fun busy(target: String) = mutable.value[target]?.running == true
@@ -74,8 +82,16 @@ class OperationRegistry(
      * arrives faster than a dispatch, and claiming the target inside the launched body left a
      * window in which both presses saw an idle target (UX01).
      */
-    fun start(kind: OperationKind, target: String, timeoutMs: Long = kind.timeoutMs, block: suspend (OperationHandle) -> Unit): Job? {
+    fun start(
+        kind: OperationKind,
+        target: String,
+        timeoutMs: Long = kind.timeoutMs,
+        /** Replays exactly this request, with the arguments it was made with. */
+        retry: (() -> Unit)? = null,
+        block: suspend (OperationHandle) -> Unit
+    ): Job? {
         val id = claim(kind, target) ?: return null
+        if (retry != null) retries[target] = retry else retries.remove(target)
         val job = scope.launch { execute(id, kind, target, timeoutMs, block) }
         jobs[target] = job
         // RUNNING is published before the coroutine is dispatched, so a cancel that lands in
@@ -98,8 +114,15 @@ class OperationRegistry(
      * The same contract for a caller that is already inside a coroutine it wants to keep. There is
      * no job to register, so [cancel] cannot reach it; only use it for work that is not cancellable.
      */
-    suspend fun run(kind: OperationKind, target: String, timeoutMs: Long = kind.timeoutMs, block: suspend (OperationHandle) -> Unit) {
+    suspend fun run(
+        kind: OperationKind,
+        target: String,
+        timeoutMs: Long = kind.timeoutMs,
+        retry: (() -> Unit)? = null,
+        block: suspend (OperationHandle) -> Unit
+    ) {
         val id = claim(kind, target) ?: return
+        if (retry != null) retries[target] = retry else retries.remove(target)
         execute(id, kind, target, timeoutMs, block)
     }
 
@@ -148,11 +171,22 @@ class OperationRegistry(
     /** §3: cancelling stops waiting. It does not undo a command already sent. */
     fun cancel(target: String) { jobs[target]?.cancel() }
 
-    fun dismiss(target: String) {
-        mutable.update { current -> current[target]?.takeIf { it.settled }?.let { current - target } ?: current }
+    /** Whether this target has a settled result that may be repeated. */
+    fun canRetry(target: String) = retries.containsKey(target) && of(target)?.safeToRetry == true
+
+    /** Repeats the request that failed, not whichever request the screen happens to be showing. */
+    fun retry(target: String): Boolean {
+        if (!canRetry(target)) return false
+        retries[target]?.invoke()
+        return true
     }
 
-    fun clear() { jobs.values.forEach { it.cancel() }; jobs.clear(); mutable.value = emptyMap() }
+    fun dismiss(target: String) {
+        mutable.update { current -> current[target]?.takeIf { it.settled }?.let { current - target } ?: current }
+        if (of(target) == null) retries.remove(target)
+    }
+
+    fun clear() { jobs.values.forEach { it.cancel() }; jobs.clear(); retries.clear(); mutable.value = emptyMap() }
 
     private fun settle(target: String, id: String, phase: OperationPhase, detail: String?, retryable: Boolean) =
         patch(target, id) { it.copy(phase = phase, detail = detail, retryable = retryable, settledAt = clock()) }

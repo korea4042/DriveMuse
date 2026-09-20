@@ -90,6 +90,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     val operationStates=operations.flow
     fun cancelOperation(target: String) = operations.cancel(target)
     fun dismissOperation(target: String) = operations.dismiss(target)
+    /** Repeats whatever failed on this control, with the arguments it originally carried. */
+    fun retryOperation(target: String) { operations.retry(target) }
+    fun canRetryOperation(target: String) = operations.canRetry(target)
     private val location=LocationAdapter(application)
     private val weather=WeatherRepository()
     private var region: Region?=null
@@ -900,7 +903,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     /** §3: saved schedules take effect on the next assessment and never interrupt the current song. */
     fun saveSchedule(schedule: CommuteSchedule) {
         if (ui.value.driving) { message("정차 후 설정해 주세요"); return }
-        operations.start(OperationKind.SAVE,OperationRegistry.schedule(schedule.direction.name)) { op ->
+        operations.start(OperationKind.SAVE,OperationRegistry.schedule(schedule.direction.name),
+            retry = { saveSchedule(schedule) }) { op ->
             val intended = schedule.copy(revision = schedule.revision + 1)
             val next = schedules.value.filterNot { it.id == intended.id } + intended
             prefs.string("commuteSchedules",CommuteCodec.encode(next))
@@ -917,7 +921,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
 
     fun deleteSchedule(direction: CommuteDirection, id: String) {
         if (ui.value.driving) { message("정차 후 설정해 주세요"); return }
-        operations.start(OperationKind.SAVE,OperationRegistry.schedule(direction.name)) { op ->
+        operations.start(OperationKind.SAVE,OperationRegistry.schedule(direction.name),
+            retry = { deleteSchedule(direction, id) }) { op ->
             val intended = schedules.value.filterNot { it.id == id }
             prefs.string("commuteSchedules",CommuteCodec.encode(intended))
             // Same standard as saving: the list on disk has to be the list that was meant, not

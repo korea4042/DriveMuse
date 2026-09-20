@@ -25,8 +25,6 @@ private val DAY_LABELS = listOf(
     DayOfWeek.THURSDAY to "목", DayOfWeek.FRIDAY to "금", DayOfWeek.SATURDAY to "토", DayOfWeek.SUNDAY to "일"
 )
 
-private enum class ScheduleAction { SAVE, DELETE }
-
 private fun blank(direction: CommuteDirection) = CommuteSchedule(
     id = "commute.${direction.name}",
     direction = direction,
@@ -93,12 +91,6 @@ private fun blank(direction: CommuteDirection) = CommuteSchedule(
     onCopyDays: (() -> Unit)? = null
 ) {
     var picking by remember { mutableStateOf(false) }
-    // Save and delete share one operation target so they cannot run at once, which means the
-    // status line's retry has to know which of the two failed. It used to always call save, so
-    // retrying a failed delete wrote the schedule back.
-    var pending by remember(schedule.id) { mutableStateOf(ScheduleAction.SAVE) }
-    fun save() { pending = ScheduleAction.SAVE; vm.saveSchedule(schedule) }
-    fun delete() { pending = ScheduleAction.DELETE; vm.deleteSchedule(schedule.direction, schedule.id) }
     val place = if (schedule.direction == CommuteDirection.TO_WORK) Zone.HOME else Zone.WORK
     val placeName = if (place == Zone.HOME) "집" else "회사"
 
@@ -152,13 +144,17 @@ private fun blank(direction: CommuteDirection) = CommuteSchedule(
             "일정 기준 시간대 ${schedule.timezoneId} · 기기 시간대 ${ZoneId.systemDefault().id}",
             fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Cyan)
 
-        DriveButton("${schedule.direction.label} 일정 저장", !driving) { save() }
-        if (saved) TextButton(onClick = { delete() }, enabled = !driving) {
+        val target = OperationRegistry.schedule(schedule.direction.name)
+        DriveButton("${schedule.direction.label} 일정 저장", !driving) { vm.saveSchedule(schedule) }
+        // Save and delete share the target so they cannot run at once. Which of them is
+        // outstanding is the ViewModel's business, not this card's: leaving and coming back would
+        // reset a remembered flag here and turn a failed delete's retry into a save.
+        if (saved) TextButton(onClick = { vm.deleteSchedule(schedule.direction, schedule.id) }, enabled = !driving) {
             Text("${schedule.direction.label} 일정 삭제")
         }
-        OperationStatus(rememberOperation(vm, OperationRegistry.schedule(schedule.direction.name)),
-            onDismiss = { vm.dismissOperation(OperationRegistry.schedule(schedule.direction.name)) },
-            onRetry = { if (pending == ScheduleAction.DELETE) delete() else save() })
+        OperationStatus(rememberOperation(vm, target),
+            onDismiss = { vm.dismissOperation(target) },
+            onRetry = { vm.retryOperation(target) })
     }
 
     if (picking) TimePickerDialog(schedule.departureLocalTime, onDismiss = { picking = false }) {
