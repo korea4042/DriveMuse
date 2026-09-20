@@ -27,6 +27,12 @@ data class UiState(
     val connection: String = "미연결", val reason: String = "좋아하는 음악과 새로운 발견 사이",
     val engineLabel: String = "초기 취향 · Spotify 재생", val weatherLabel: String = "날씨 정보 없음", val consent: android.app.PendingIntent? = null,
     /**
+     * What the app is doing right now, in the user's words. Tapping a button that talks to the
+     * network or the GPS used to change nothing on screen until it finished, so the only way to
+     * tell it had registered was to wait and see.
+     */
+    val working: String? = null,
+    /**
      * §7 QUE01, FIX-B: why the list no longer matches its conditions. A set rather than a flag,
      * because a recovery from an off-plan recording must not also clear an outstanding rule change.
      */
