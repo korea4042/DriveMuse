@@ -90,7 +90,7 @@ jobs:
       # same JSON is also staged on ci-logs where the plain contents API can read it. This is a
       # transport for review only: the reviewed file is committed to the working branch by hand.
       - name: Stage Room schemas for review
-        if: success()
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -131,7 +131,7 @@ jobs:
             core/domain/build/reports/tests
 
   migration:
-    name: Room migration 7 to 8
+    name: Room migration upgrades
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

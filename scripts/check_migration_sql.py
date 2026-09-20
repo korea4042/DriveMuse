@@ -3,6 +3,7 @@ import re, sqlite3
 root=Path(__file__).resolve().parents[1]
 s=(root/'app/src/main/java/ai/drivemuse/app/Storage.kt').read_text()
 db=sqlite3.connect(':memory:')
+db.execute('PRAGMA foreign_keys=ON')
 db.execute('CREATE TABLE rules (id TEXT PRIMARY KEY, text TEXT)')
 db.execute('CREATE TABLE history (id TEXT PRIMARY KEY, title TEXT)')
 db.execute("CREATE TABLE played (rowId INTEGER PRIMARY KEY AUTOINCREMENT, videoId TEXT, playedAt INTEGER)")
@@ -74,4 +75,40 @@ for name, in db.execute("SELECT name FROM sqlite_master WHERE type='index' AND t
     actual_idx.add((name, bool(uniq), tuple(r[2] for r in info)))
 assert actual_idx==expected_idx, (actual_idx, expected_idx)
 
-print('PASS: additive migrations v1→v8 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns, and key batches by (sessionId, generation, batchSeq) matching the exported schema 8')
+# v9: the independent metadata layer. Both tables key on candidates.videoId and cascade with it,
+# which is what S7 checks on a device. `candidates` gained no column and metadata_assertion, which
+# belongs to the §27 UUID namespace, is untouched.
+for t in ['candidate_assertion','enrichment_state']:
+    assert db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(t,)).fetchone(), t
+assert 'isrc' not in [r[1] for r in db.execute('PRAGMA table_info(candidates)')], 'candidates must not gain columns in v9'
+db.execute("INSERT INTO candidate_assertion VALUES ('a1','abcdefghijk','tag','chill','COMMUNITY_TAG','LASTFM',.65,'[]',1,0,NULL)")
+db.execute("INSERT INTO enrichment_state VALUES ('abcdefghijk','DONE','DONE','PENDING',1,0,0,1)")
+try:
+ db.execute("INSERT INTO candidate_assertion VALUES ('a2','no-such-candidate','tag','chill','COMMUNITY_TAG','LASTFM',.65,'[]',1,0,NULL)")
+ raise AssertionError('assertion accepted for a candidate that does not exist')
+except sqlite3.IntegrityError: pass
+db.execute("DELETE FROM candidates WHERE videoId='abcdefghijk'")
+assert db.execute('SELECT count(*) FROM candidate_assertion').fetchone()==(0,), 'assertion outlived its candidate'
+assert db.execute('SELECT count(*) FROM enrichment_state').fetchone()==(0,), 'state outlived its candidate'
+# Deleting the candidate must not touch the §27 layer or the exposure log.
+assert db.execute('SELECT count(*) FROM played').fetchone()==(1,)
+assert db.execute('SELECT count(*) FROM metadata_assertion').fetchone()==(0,)
+
+# The cascade has a sharp edge: `INSERT OR REPLACE` deletes the old row first, so a DAO that writes
+# candidates with OnConflictStrategy.REPLACE would wipe the enrichment of every track the next pool
+# refresh saw again. putCandidates must upsert. This is the SQL half; the annotation is checked below.
+db.execute("INSERT INTO candidates VALUES ('abcdefghijk','Blue Hour','Northbound',210,'',0,.5,.5,NULL,'chart',1000,NULL,NULL,NULL,NULL,NULL)")
+db.execute("INSERT INTO candidate_assertion VALUES ('a3','abcdefghijk','tag','chill','COMMUNITY_TAG','LASTFM',.65,'[]',1,0,NULL)")
+cols=[r[1] for r in db.execute('PRAGMA table_info(candidates)')]
+row=list(db.execute("SELECT * FROM candidates WHERE videoId='abcdefghijk'").fetchone())
+assignments=', '.join('%s=?' % c for c in cols if c!='videoId')
+db.execute("INSERT INTO candidates VALUES (%s) ON CONFLICT(videoId) DO UPDATE SET %s" % (','.join('?'*len(cols)), assignments),
+           row+[v for c,v in zip(cols,row) if c!='videoId'])
+assert db.execute('SELECT count(*) FROM candidate_assertion').fetchone()==(1,), 'upsert of a candidate dropped its assertions'
+db.execute("INSERT OR REPLACE INTO candidates VALUES (%s)" % ','.join('?'*len(cols)), row)
+assert db.execute('SELECT count(*) FROM candidate_assertion').fetchone()==(0,), 'expected REPLACE to cascade; the guard below would be pointless'
+storage=s
+marker='@Upsert suspend fun putCandidates'
+assert marker in storage, 'putCandidates must be @Upsert: REPLACE cascades the enrichment tables away'
+
+print('PASS: additive migrations v1→v8 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns, key batches by (sessionId, generation, batchSeq) matching the exported schema 8, cascade the v9 enrichment tables from candidates, and keep those rows across a pool refresh')
