@@ -38,6 +38,16 @@ jobs:
         run: |
           set -o pipefail
           chmod +x gradlew && ./gradlew :core:domain:test :app:testDebugUnitTest :app:assembleDebug 2>&1 | tee /tmp/build.log
+      # Room writes app/schemas during the build. The JSON is reviewed and committed by hand, so
+      # it is published as an artifact rather than pushed back into the branch.
+      - name: Upload Room schemas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: room-schemas-${{ github.sha }}
+          path: app/schemas/**/*.json
+          if-no-files-found: warn
+
       # Actions log downloads are not reachable from every environment, so a failure tail is
       # committed to the ci-logs branch where the plain contents API can read it.
       - name: Publish failure tail
