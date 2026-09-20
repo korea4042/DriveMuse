@@ -305,6 +305,29 @@ object CommuteCodec {
     /** True when the stored value is still in the 0.14.0 JSON shape and needs converting. */
     fun isLegacy(raw: String) = raw.trimStart().startsWith("[")
 
+    /**
+     * What a conversion of the 0.14.0 value would produce, and whether it understood all of it.
+     *
+     * [complete] separates an array that was genuinely empty from one whose records could not be
+     * read: both decode to an empty list, and only the first is safe to write back. A conversion
+     * that is not complete must leave the original bytes alone, because overwriting drops the
+     * records it failed to understand permanently.
+     */
+    data class Migration(val schedules: List<CommuteSchedule>, val recordsSeen: Int) {
+        val complete get() = schedules.size == recordsSeen
+        /** The new-format text, verified by decoding it again. Null when it would not round-trip. */
+        val verified: String? get() = encode(schedules).takeIf { decode(it) == schedules }
+    }
+
+    fun migrate(raw: String): Migration {
+        val schedules = decode(raw)
+        // Only the legacy shape can lose records; anything already in the new format is by
+        // definition fully understood, so it reports complete rather than a mismatch of zero.
+        val seen = if (isLegacy(raw)) splitTopLevel(raw.trim().removePrefix("[").removeSuffix("]"), ',').size
+                   else schedules.size
+        return Migration(schedules, seen)
+    }
+
     fun decode(raw: String): List<CommuteSchedule> {
         if (raw.isBlank()) return emptyList()
         // 0.14.0 wrote JSON under this same key. Replacing the codec without reading the old shape

@@ -164,15 +164,13 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // form; a failed conversion leaves the original where it is rather than clearing it.
             val stored = prefs.flow.first().commuteJson
             if (CommuteCodec.isLegacy(stored)) {
-                val recovered = CommuteCodec.decode(stored)
-                if (recovered.isEmpty()) prefs.string("commuteSchedules","")
-                else {
-                    prefs.string("commuteSchedules",CommuteCodec.encode(recovered))
-                    if (CommuteCodec.decode(prefs.flow.first().commuteJson) != recovered) {
-                        prefs.string("commuteSchedules",stored)
-                        message("출퇴근 일정을 새 형식으로 옮기지 못했어요. 설정에서 확인해 주세요")
-                    }
-                }
+                // Convert and check the round trip in memory, then write once. Writing first and
+                // checking afterwards means a failed check has to undo a write, and an empty
+                // result cannot be told apart from records that simply could not be read.
+                val migration = CommuteCodec.migrate(stored)
+                val converted = migration.verified
+                if (migration.complete && converted != null) prefs.string("commuteSchedules",converted)
+                else message("출퇴근 일정 일부를 새 형식으로 옮기지 못해 기존 설정을 그대로 두었어요. 설정에서 확인해 주세요")
             }
         }
         viewModelScope.launch {

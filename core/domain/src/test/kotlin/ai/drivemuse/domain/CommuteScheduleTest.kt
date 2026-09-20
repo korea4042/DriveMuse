@@ -1,6 +1,7 @@
 package ai.drivemuse.domain
 
 import org.junit.Assert.*
+import kotlin.test.assertNotNull
 import org.junit.Test
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -356,6 +357,47 @@ class CommuteScheduleTest {
 
     @Test fun anEmptyOldArrayIsNotAnError() {
         assertEquals(emptyList<CommuteSchedule>(), CommuteCodec.decode("[]"))
+    }
+
+    @Test fun anEmptyArrayIsCompleteButUnreadableRecordsAreNot() {
+        // Both decode to nothing. Only the first may be written back over the original.
+        val empty = CommuteCodec.migrate("[]")
+        assertTrue(empty.complete)
+        assertEquals(0, empty.recordsSeen)
+        assertEquals("", empty.verified)
+
+        val unreadable = CommuteCodec.migrate(legacy("""{"id":"x","direction":"SIDEWAYS"}"""))
+        assertFalse(unreadable.complete)
+        assertEquals(1, unreadable.recordsSeen)
+        assertTrue(unreadable.schedules.isEmpty())
+    }
+
+    @Test fun aPartialConversionIsNotComplete() {
+        val raw = legacy(
+            """{"id":"commute.TO_WORK","direction":"TO_WORK","weekdays":["MONDAY"],"departure":"08:00","before":15,"after":45,"zone":"Asia/Seoul","enabled":true,"revision":1}""",
+            """{"id":"broken","direction":"SIDEWAYS","departure":"nope"}""")
+        val migration = CommuteCodec.migrate(raw)
+        assertEquals(2, migration.recordsSeen)
+        assertEquals(1, migration.schedules.size)
+        // Writing this back would drop the record it could not read, permanently.
+        assertFalse(migration.complete)
+    }
+
+    @Test fun aCompleteConversionVerifiesItsOwnRoundTrip() {
+        val raw = legacy(
+            """{"id":"commute.TO_WORK","direction":"TO_WORK","weekdays":["MONDAY","FRIDAY"],"departure":"08:00","before":15,"after":45,"zone":"Asia/Seoul","enabled":true,"revision":1}""",
+            """{"id":"commute.TO_HOME","direction":"TO_HOME","weekdays":["SUNDAY"],"departure":"23:50","before":0,"after":120,"zone":"Europe/London","enabled":false,"revision":9}""")
+        val migration = CommuteCodec.migrate(raw)
+        assertTrue(migration.complete)
+        val converted = assertNotNull(migration.verified)
+        assertFalse(CommuteCodec.isLegacy(converted))
+        assertEquals(migration.schedules, CommuteCodec.decode(converted))
+    }
+
+    @Test fun somethingAlreadyInTheNewFormatIsCompleteByDefinition() {
+        val migration = CommuteCodec.migrate(CommuteCodec.encode(listOf(schedule())))
+        assertTrue(migration.complete)
+        assertEquals(1, migration.schedules.size)
     }
 
     // --- §5: a location answer arriving after the connection ended is not written back ---
