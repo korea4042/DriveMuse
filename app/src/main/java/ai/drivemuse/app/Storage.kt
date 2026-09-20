@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import ai.drivemuse.domain.*
 import ai.drivemuse.app.catalog.*
+import ai.drivemuse.app.enrichment.*
 
 val Context.driveStore by preferencesDataStore("drivemuse")
 
@@ -186,12 +187,14 @@ class Preferences(private val context: Context) {
 @Database(entities = [RuleEntity::class, HistoryEntity::class, CandidateEntity::class, PlayedEntity::class, ArtistGenreEntity::class, IntelligenceState::class, BatchEntity::class, OutcomeEntity::class,
     TrackEntity::class, TrackIdentifierEntity::class, PlayableRefEntity::class, MetadataAssertionEntity::class, DiscoveryItemEntity::class, EnrichmentJobEntity::class, ValidationDecisionEntity::class,
     IdentityAliasEntity::class, TrackExperienceEntity::class, UserTrackContextEntity::class, DiscoverySeedEntity::class, CollectionRunEntity::class, CollectionControlEntity::class, QuotaLedgerEntity::class, IntegrationConfigEntity::class,
-    PlaybackAttemptEntity::class, PlaybackEventEntity::class],
-    version = 8, exportSchema = true)
+    PlaybackAttemptEntity::class, PlaybackEventEntity::class,
+    CandidateAssertionEntity::class, EnrichmentStateEntity::class],
+    version = 9, exportSchema = true)
 abstract class DriveDatabase: RoomDatabase() {
     abstract fun dao(): DriveDao
     abstract fun intelligence(): IntelligenceDao
     abstract fun catalog(): CatalogDao
+    abstract fun enrichment(): EnrichmentDao
     companion object {
         /** Additive only: rules and history from 0.1.0 installs survive the upgrade. */
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -310,9 +313,25 @@ abstract class DriveDatabase: RoomDatabase() {
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_batches_sessionId_generation_batchSeq` ON `batches` (`sessionId`, `generation`, `batchSeq`)")
             }
         }
+        /**
+         * The independent metadata layer (Last.fm, MusicBrainz, metadata-interpreter). Two new
+         * tables keyed on the Spotify id in `candidates.videoId`, with ON DELETE CASCADE so an
+         * assertion cannot outlive the candidate it describes. Nothing existing is touched:
+         * `candidates` gains no column and `metadata_assertion` keeps the §27 UUID namespace.
+         */
+        val MIGRATION_8_9 = object : Migration(8,9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `candidate_assertion` (`assertionId` TEXT NOT NULL, `trackId` TEXT NOT NULL, `field` TEXT NOT NULL, `valueJson` TEXT NOT NULL, `basis` TEXT NOT NULL, `source` TEXT NOT NULL, `confidence` REAL, `evidenceIdsJson` TEXT NOT NULL, `metadataVersion` INTEGER NOT NULL, `fetchedAt` INTEGER NOT NULL, `expiresAt` INTEGER, PRIMARY KEY(`assertionId`), FOREIGN KEY(`trackId`) REFERENCES `candidates`(`videoId`) ON UPDATE NO ACTION ON DELETE CASCADE )")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_candidate_assertion_trackId_field` ON `candidate_assertion` (`trackId`, `field`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_candidate_assertion_expiresAt` ON `candidate_assertion` (`expiresAt`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `enrichment_state` (`trackId` TEXT NOT NULL, `mbStatus` TEXT NOT NULL, `lfStatus` TEXT NOT NULL, `llmStatus` TEXT NOT NULL, `metadataVersion` INTEGER NOT NULL, `lastAttemptAt` INTEGER NOT NULL, `nextEligibleAt` INTEGER NOT NULL, `attempts` INTEGER NOT NULL, PRIMARY KEY(`trackId`), FOREIGN KEY(`trackId`) REFERENCES `candidates`(`videoId`) ON UPDATE NO ACTION ON DELETE CASCADE )")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_enrichment_state_nextEligibleAt` ON `enrichment_state` (`nextEligibleAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_enrichment_state_lfStatus` ON `enrichment_state` (`lfStatus`)")
+            }
+        }
         @Volatile private var instance: DriveDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build().also { instance = it }
+            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9).build().also { instance = it }
         }
     }
 }

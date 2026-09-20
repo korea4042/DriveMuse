@@ -105,6 +105,17 @@ object Policy {
      * covered and is still recorded.
      */
     const val SPOTIFY_BEHAVIOR_LEARNING_ALLOWED = false
+    /**
+     * Independent metadata enrichment (§5, §9 of the enrichment design). Adjustable policy values,
+     * not measured limits. The per-run ceilings exist so a pool refresh is never held up by
+     * enrichment; the daily one splits the model budget while the selector stays shut.
+     */
+    const val ENRICH_BATCH = 30
+    const val ENRICH_MAX_REQUESTS = 60
+    const val ENRICH_MAX_MS = 90_000L
+    const val LLM_DAILY_METADATA = 40
+    const val TAG_MIN_COUNT = 10
+    const val TAG_MAX = 15
     /** v1 requests youtube.readonly only. Write scopes are requested per feature, never at onboarding. */
     const val SCOPE_READONLY = "https://www.googleapis.com/auth/youtube.readonly"
     /** Provider track ids: a Spotify id is 22 base62 characters, an older YouTube id is 11. */
