@@ -31,13 +31,21 @@ object UpdateChecker {
 
         // The title carries the version the release was built from: "DriveMuse 0.5.1".
         val published = root.optString("name").substringAfterLast(' ').trim()
+        // versionName alone is not an identity. Two different builds shipped as 0.13.0 because the
+        // name was not bumped with the code, and this reported "up to date" on the older one. CI
+        // writes the versionCode into the release body; when it is there, it decides.
+        val publishedCode = Regex("versionCode (\\d+)").find(root.optString("body"))?.groupValues?.get(1)?.toIntOrNull()
         val asset = root.optJSONArray("assets")?.let { a ->
             (0 until a.length()).mapNotNull { a.optJSONObject(it) }
                 .firstOrNull { it.optString("name").endsWith(".apk") }
         } ?: return@withContext null
         val url = asset.optString("browser_download_url").takeIf { it.isNotBlank() } ?: return@withContext null
         val installed = BuildConfig.VERSION_NAME
-        if (published.isBlank() || !newer(published, installed)) return@withContext null
+        val behind = when {
+            publishedCode != null -> publishedCode > BuildConfig.VERSION_CODE
+            else -> published.isNotBlank() && newer(published, installed)
+        }
+        if (!behind) return@withContext null
         UpdateInfo(published, installed, url, root.optString("body").take(200))
     }
 

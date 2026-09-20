@@ -100,6 +100,12 @@ class MainActivity: ComponentActivity() {
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         vm.message(if(result.values.all { it }) "권한이 허용되었습니다" else "권한 없이도 수동 선곡을 이용할 수 있습니다")
     }
+    // Pinned to the bottom rather than placed in the list: a banner at the top of a long settings
+    // page is off screen exactly when the button that started the work is the one being tapped.
+    // Work started from either view model shows in the same place.
+    val catalogBusy by cvm.busy.collectAsStateWithLifecycle()
+    val activity = ui.working ?: catalogBusy?.let { "${cvm.label(it)} 처리 중…" }
+    LaunchedEffect(activity) { activity?.let { snackbar.showSnackbar(it, duration = SnackbarDuration.Indefinite) } }
     LaunchedEffect(ui.message) { ui.message?.let { snackbar.showSnackbar(it); vm.message(null) } }
     LaunchedEffect(catalogMessage) { catalogMessage?.let { snackbar.showSnackbar(it); cvm.message(null) } }
     Scaffold(containerColor=DriveColors.Carbon, snackbarHost={ SnackbarHost(snackbar) }, bottomBar={
@@ -115,14 +121,6 @@ class MainActivity: ComponentActivity() {
             Box(Modifier.padding(padding)) { OnboardingScreen(survey!!,surveyBusy,vm::surveyAnswer,vm::surveyStep,vm::surveyConsent,vm::completeSurvey) }
         } else LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(22.dp),verticalArrangement=Arrangement.spacedBy(22.dp)) {
             item { Row(verticalAlignment=Alignment.CenterVertically) { Box(Modifier.weight(1f)) { Brand() }; IconButton(onClick={ vm.page("설정") },enabled=!ui.driving) { Icon(Icons.Outlined.Settings,"설정",tint=DriveColors.Muted) } } }
-            // A tap that talks to the network or the GPS used to change nothing on screen until it
-            // finished. This says what is running, from the moment it starts.
-            ui.working?.let { label -> item {
-                Row(Modifier.fillMaxWidth().semantics { contentDescription = label },verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                    CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp,color=DriveColors.Cyan)
-                    Text(label,fontSize=14.sp,color=DriveColors.Muted)
-                }
-            } }
             if (ui.driving) {
                 item { Title("지금은, 음악과 길에만.","운전 모드 · 설정과 입력을 잠시 숨겼어요") }
                 item { GlassSurface { AgentOrb(active=false); Text("사용자 선택 유지 중",fontSize=24.sp); Text("음악 조작은 Spotify 또는 차량 화면에서 이용하세요.",color=DriveColors.Muted) } }

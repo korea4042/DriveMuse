@@ -160,7 +160,9 @@ jobs:
         run: |
           mv apk/*.apk DriveMuse.apk
           VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
-          NOTES="commit $GITHUB_SHA"
+          CODE=$(grep -o 'versionCode = [0-9]*' app/build.gradle.kts | head -1 | grep -o '[0-9]*')
+          # The app compares versionCode, because two builds can share a versionName.
+          NOTES="versionCode $CODE · commit $GITHUB_SHA"
           if gh release view latest >/dev/null 2>&1; then
             gh release edit latest --title "DriveMuse $VERSION" --notes "$NOTES" --prerelease=false --latest
           else

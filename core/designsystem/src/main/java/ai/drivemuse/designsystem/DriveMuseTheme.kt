@@ -3,6 +3,13 @@ package ai.drivemuse.designsystem
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -57,6 +64,28 @@ object DriveColors {
         drawPath(line, Color(0xFFEAC9B1).copy(alpha=.65f), style=Stroke(2.dp.toPx()))
     }
 }
-@Composable fun DriveButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
-    Button(onClick, enabled = enabled, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text(text, fontWeight = FontWeight.SemiBold) }
+/**
+ * The primary button, with a tap the user can feel.
+ *
+ * Most actions here hand off to a coroutine and return immediately, so for anything from a
+ * hundred milliseconds to several seconds the screen looked exactly as it did before the tap and
+ * the only way to know it had registered was to wait. A haptic tick answers that question at the
+ * moment of the press, without depending on anything rendering.
+ *
+ * [busy] shows the work in the button itself, which is where the user is already looking.
+ */
+@Composable fun DriveButton(text: String, enabled: Boolean = true, busy: Boolean = false, onClick: () -> Unit) {
+    val haptics = LocalHapticFeedback.current
+    Button(
+        onClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
+        enabled = enabled && !busy,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+    ) {
+        if (busy) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current)
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(text, fontWeight = FontWeight.SemiBold)
+    }
 }
