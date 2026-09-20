@@ -44,7 +44,7 @@ enum class Shortcut(val key: SteeringKey, val gesture: Gesture, val action: Shor
 
 // --- §3: what a given car, over a given transport, is known to deliver ---
 
-enum class Capability(val label: String, val usable: Boolean) {
+enum class InputCapability(val label: String, val usable: Boolean) {
     UNTESTED("확인 전", false),
     SUPPORTED("지원 확인", true),
     /** Verified only under stated conditions — never presented as always-on while driving. */
@@ -66,7 +66,7 @@ data class CapabilityRecord(
     val vehicleId: String,
     val transport: Transport,
     val shortcut: Shortcut,
-    val capability: Capability = Capability.UNTESTED,
+    val capability: InputCapability = InputCapability.UNTESTED,
     val conditions: Set<CapabilityCondition> = emptySet(),
     val checkedAt: Long = 0,
     /** The app, OS and player build the check was made against; a change invalidates it. */
@@ -77,7 +77,7 @@ data class CapabilityRecord(
 ) {
     /** §3: a check made against different software has to be repeated before it counts. */
     fun stale(appVersionCode: Int, osBuild: String, playerVersion: String) =
-        capability != Capability.UNTESTED &&
+        capability != InputCapability.UNTESTED &&
         (this.appVersionCode != appVersionCode || this.osBuild != osBuild || this.playerVersion != playerVersion)
 
     fun active(userEnabled: Boolean, appVersionCode: Int, osBuild: String, playerVersion: String) =

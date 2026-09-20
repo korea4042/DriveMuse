@@ -285,14 +285,14 @@ class SteeringGestureReducerTest {
     // --- §3: capability records gate everything above ---
 
     @Test fun onlyAVerifiedCapabilityIsUsable() {
-        assertFalse(Capability.UNTESTED.usable)
-        assertFalse(Capability.UNSUPPORTED.usable)
-        assertTrue(Capability.SUPPORTED.usable)
-        assertTrue(Capability.LIMITED.usable)
+        assertFalse(InputCapability.UNTESTED.usable)
+        assertFalse(InputCapability.UNSUPPORTED.usable)
+        assertTrue(InputCapability.SUPPORTED.usable)
+        assertTrue(InputCapability.LIMITED.usable)
     }
 
     @Test fun aResultFromDifferentSoftwareHasToBeCheckedAgain() {
-        val record = CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01, Capability.SUPPORTED,
+        val record = CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01, InputCapability.SUPPORTED,
             checkedAt = 1, appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9")
         assertFalse(record.stale(51, "TQ3A", "8.9"))
         assertTrue(record.active(userEnabled = true, appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9"))
@@ -305,7 +305,7 @@ class SteeringGestureReducerTest {
     }
 
     @Test fun theUserSwitchStillHasToBeOn() {
-        val record = CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01, Capability.SUPPORTED,
+        val record = CapabilityRecord("car", Transport.BLUETOOTH, Shortcut.SC01, InputCapability.SUPPORTED,
             appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9")
         assertFalse(record.active(userEnabled = false, appVersionCode = 51, osBuild = "TQ3A", playerVersion = "8.9"))
     }
