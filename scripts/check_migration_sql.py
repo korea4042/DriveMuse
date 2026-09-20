@@ -54,4 +54,24 @@ cols=[r[1] for r in db.execute('PRAGMA table_info(candidates)')]
 for c in ['energyHint','energyBasis','artistIds','popularity']: assert c in cols, c
 db.execute("INSERT INTO artist_genre_cache VALUES ('a1','[\"k-pop\"]',0)")
 assert db.execute("SELECT genresJson FROM artist_genre_cache WHERE artistId='a1'").fetchone()==('["k-pop"]',)
-print('PASS: additive migrations v1→v8 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns, and key batches by (sessionId, generation, batchSeq)')
+# The exported schema is Room's own expectation for version 8. Comparing the migrated table
+# against it catches the mismatch that would otherwise only appear when a user's app next opens
+# the database. This is a definition check, not Room's runtime validator: MigrationTestHelper on a
+# device remains the authority on the upgrade path.
+import json
+schema=json.loads((root/'app/schemas/ai.drivemuse.app.DriveDatabase/8.json').read_text())
+entity=next(e for e in schema['database']['entities'] if e['tableName']=='batches')
+expected_cols=[(f['columnName'], f['affinity'], f['notNull']) for f in entity['fields']]
+actual=[(r[1], r[2], bool(r[3])) for r in db.execute('PRAGMA table_info(batches)')]
+assert actual==expected_cols, (actual, expected_cols)
+# Room stores no defaultValue for batchSeq, so the migrated table must not carry a SQL default.
+assert all(r[4] is None for r in db.execute('PRAGMA table_info(batches)')), 'unexpected column default'
+expected_idx={(i['name'], bool(i['unique']), tuple(i['columnNames'])) for i in entity.get('indices',[])}
+actual_idx=set()
+for name, in db.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='batches' AND name NOT LIKE 'sqlite_%'"):
+    info=list(db.execute("PRAGMA index_info(%s)" % name))
+    uniq=[r[2] for r in db.execute('PRAGMA index_list(batches)') if r[1]==name][0]
+    actual_idx.add((name, bool(uniq), tuple(r[2] for r in info)))
+assert actual_idx==expected_idx, (actual_idx, expected_idx)
+
+print('PASS: additive migrations v1→v8 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns, and key batches by (sessionId, generation, batchSeq) matching the exported schema 8')
