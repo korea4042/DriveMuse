@@ -87,6 +87,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val offered=java.util.Collections.synchronizedSet(mutableSetOf<String>())
     /** FIX-B: every loss of control advances it, so a callback from before cannot clear one after. */
     private val controlEpoch=ControlEpoch()
+    /** FIX-B follow-up: which queued slots are still unaccounted for, one by one. */
+    private val delivery=DeliveryLedger()
     private suspend fun touchSession() {
         val previous=sessionId
         runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } }
@@ -451,12 +453,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private suspend fun appendToPlayer(carried: List<Track>, queue: List<Track>) {
         observer.plan(null, carried + queue)
         var queued = 0
-        var unclear = 0
+        val uncertain = mutableListOf<String>()
         for (track in queue) when (runtime.spotifyRemote.queue(track.id)) {
             is ai.drivemuse.app.spotify.DispatchResult.Accepted -> queued++
-            is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
+            is ai.drivemuse.app.spotify.DispatchResult.Unknown -> uncertain += track.id
             is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
         }
+        delivery.dispatched(uncertain)
+        val unclear = uncertain.size
+        if (unclear > 0) mutable.update { it.copy(stale=it.stale+StaleReason.DELIVERY_UNCERTAIN) }
         message(when {
             queued == queue.size -> "다음 ${queued}곡을 이어서 준비했어요"
             // R02/§7: an unconfirmed item is not a waiting track. Say so rather than count it.
@@ -505,6 +510,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         // No expiry. Waiting out a clock is not consent, so the flag is cleared by an explicit
         // request to play or by a new drive session, never by time passing.
         controlEpoch.advance()
+        delivery.clear()
         prefs.flag("controlLost", true)
         mutable.update { it.copy(stale=it.stale+StaleReason.CONTROL_LOST) }
         message("목록에 없는 곡이 재생돼 자동 선곡을 멈췄어요. 목록에서 곡을 선택하면 다시 시작합니다")
@@ -521,7 +527,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * on an unclear queue result and can be cleared by nothing else.
      */
     private suspend fun onPlannedStart(trackId: String, ordinal: Int, plannedSize: Int) {
-        if (ordinal > 0 && StaleReason.DELIVERY_UNCERTAIN in ui.value.stale) {
+        // Only the slot actually observed is settled. One track arriving proves that one command
+        // landed and nothing about the others, so the flag lifts when the last of them is seen.
+        if (delivery.observed(trackId) && StaleReason.DELIVERY_UNCERTAIN in ui.value.stale) {
             mutable.update { it.copy(stale=it.stale-StaleReason.DELIVERY_UNCERTAIN) }
         }
         scheduler.onStarted(trackId, ordinal, plannedSize)
@@ -600,13 +608,17 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             // Exposure only (§17 EXPOSED_ONLY); the listening outcome comes from observation.
             if (!ui.value.demo) repository.recordPlay(track.id)
             var queued = 0
-            var unclear = 0
+            val uncertain = mutableListOf<String>()
             for (next in following) when (remote.queue(next.id)) {
                 is ai.drivemuse.app.spotify.DispatchResult.Accepted -> queued++
                 // Re-queueing on Unknown is how the same track lands twice (§7).
-                is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
+                is ai.drivemuse.app.spotify.DispatchResult.Unknown -> uncertain += next.id
                 is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
             }
+            // A new dispatch replaces the ledger, so a track the driver picked from the list
+            // cannot settle slots that belonged to an earlier plan.
+            delivery.dispatched(uncertain)
+            val unclear = uncertain.size
 
             // R09: the request was not the recovery. A confirmed start of the intended recording
             // is. On failure or an unclear result the app stays out of the queue.

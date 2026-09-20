@@ -40,6 +40,27 @@ jobs:
           chmod +x gradlew && ./gradlew :core:domain:test :app:testDebugUnitTest :app:assembleDebug 2>&1 | tee /tmp/build.log
       # The migration test only proves the committed schema is consistent with itself. If an entity
       # changed without exporting, the build regenerates a different JSON and this catches it.
+      # The publish-time guard is too late to stop a merge: it only runs on master. This one runs
+      # on every push, so a branch that forgot to bump fails its own checks.
+      - name: versionCode is ahead of the published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CODE=$(grep -o 'versionCode = [0-9]*' app/build.gradle.kts | head -1 | grep -o '[0-9]*')
+          if BODY=$(gh release view latest --json body --jq .body 2>/tmp/relerr); then
+            PREV=$(printf '%s' "$BODY" | grep -o 'versionCode [0-9]*' | grep -o '[0-9]*' || true)
+            if [ -z "$PREV" ]; then echo "Published release notes carry no versionCode." >&2; exit 1; fi
+            if [ "$CODE" -le "$PREV" ]; then
+              echo "versionCode $CODE is not greater than the published $PREV. Bump it in this branch." >&2
+              exit 1
+            fi
+            echo "versionCode $CODE is ahead of the published $PREV."
+          elif grep -qi "release not found\|not found" /tmp/relerr; then
+            echo "No rolling release yet; nothing to compare against."
+          else
+            cat /tmp/relerr >&2; exit 1
+          fi
+
       - name: Schema matches the committed JSON
         run: |
           if ! git diff --exit-code -- app/schemas; then
@@ -162,18 +183,34 @@ jobs:
           VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
           CODE=$(grep -o 'versionCode = [0-9]*' app/build.gradle.kts | head -1 | grep -o '[0-9]*')
           # Publishing the same versionCode twice ships a build the phone cannot tell from the one
-          # it already has, and the updater compares this number. Two such releases have already
-          # gone out, so the check lives here rather than in a reviewer's memory.
-          PREV=$(gh release view latest --json body --jq .body 2>/dev/null | grep -o 'versionCode [0-9]*' | grep -o '[0-9]*' || echo 0)
-          if [ -n "$PREV" ] && [ "$CODE" -le "$PREV" ]; then
-            echo "versionCode $CODE is not greater than the published $PREV. Bump it before merging." >&2
+          # it already has, and the updater compares this number. Every failure below stops the
+          # publish: an unreadable release is not the same as no release, and treating a lookup
+          # error as "nothing published yet" is how the check gets skipped exactly when it matters.
+          if BODY=$(gh release view latest --json body --jq .body 2>/tmp/relerr); then
+            PREV=$(printf '%s' "$BODY" | grep -o 'versionCode [0-9]*' | grep -o '[0-9]*' || true)
+            if [ -z "$PREV" ]; then
+              echo "The published release notes carry no versionCode, so the guard cannot run:" >&2
+              printf '%s\n' "$BODY" >&2
+              exit 1
+            fi
+            if [ "$CODE" -le "$PREV" ]; then
+              echo "versionCode $CODE is not greater than the published $PREV. Bump it before merging." >&2
+              exit 1
+            fi
+            # Keep the build being replaced, so an upgrade test always has a baseline. The rolling
+            # asset is overwritten in place and the 81d5510 build was already lost this way.
+            gh release download latest --pattern DriveMuse.apk --output previous.apk --clobber
+            if gh release view "v$PREV" >/dev/null 2>&1; then
+              gh release upload "v$PREV" previous.apk --clobber
+            else
+              gh release create "v$PREV" previous.apk --title "DriveMuse versionCode $PREV" --notes "Archived before publishing versionCode $CODE"
+            fi
+          elif grep -qi "release not found\|not found" /tmp/relerr; then
+            echo "No rolling release yet; this is the first publish."
+          else
+            echo "Could not read the current release, so the version guard could not run:" >&2
+            cat /tmp/relerr >&2
             exit 1
-          fi
-          # Keep the build that is being replaced, so an upgrade test always has a baseline.
-          if [ "$PREV" != "0" ]; then
-            gh release download latest --pattern DriveMuse.apk --output previous.apk --clobber 2>/dev/null \
-              && gh release create "v$PREV" previous.apk --title "DriveMuse versionCode $PREV" --notes "Archived before publishing versionCode $CODE" 2>/dev/null \
-              || echo "no previous asset to archive"
           fi
           # The app compares versionCode, because two builds can share a versionName.
           NOTES="versionCode $CODE · commit $GITHUB_SHA"
