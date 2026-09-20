@@ -94,7 +94,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } }
         // A new session clears the re-roll memory. It deliberately does not clear controlLost:
         // the id rolls over on an inactivity timer, and a timer must not hand the queue back.
-        if(sessionId!=previous) offered.clear()
+        if(sessionId!=previous) { offered.clear(); manualContext = null }
     }
     private var firstMoodSession: String?=null
     private var progress=DiscoveryProgress()
@@ -176,7 +176,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             region=location.refresh();weatherFact=region?.let { weather.get(it) };contextVersion++
             cancelSelection();coordinator.invalidate()
             val fact=weatherFact
-            mutable.update { it.copy(weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "기상청 · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"} · ${java.time.Instant.ofEpochMilli(fact.observedAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime()}${if(fact.stale(System.currentTimeMillis())) " · 오래된 관측" else ""}") }
+            mutable.update { it.copy(weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "Open-Meteo · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"} · ${java.time.Instant.ofEpochMilli(fact.observedAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime()}${if(fact.stale(System.currentTimeMillis())) " · 오래된 관측" else ""}") }
             message(if(weatherFact==null) "날씨를 가져오지 못했어요. 기본 상황으로 추천합니다" else "날씨를 갱신했습니다")
         } }
     }
@@ -293,7 +293,23 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun driving(value: Boolean) { if(value) { cancelSelection();contextJob?.cancel() }; mutable.update { it.copy(driving=value,page="홈") } }
     fun auto(value: Boolean) { if (ui.value.driving) return; viewModelScope.launch { prefs.flag("auto",value);message(if(value) "차량 연결 시 알림을 켰습니다" else "차량 연결 알림을 껐습니다") } }
     fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();markQueueStale(StaleReason.RULE_CHANGED);viewModelScope.launch { coordinator.invalidate();prefs.ratio(value);message("새 노래 비율을 ${(value*100).toInt()}%로 바꿨습니다") } }
-    fun choose(context: DriveContext) { if (ui.value.driving) return; suspendAgent();contextVersion++;mutable.update { it.copy(context=context) }; recommend() }
+    /**
+     * CTX05. Choosing a mood used to call suspendAgent, which stopped automatic selection for
+     * thirty minutes. Picking a context is a statement about what to play, not a request for the
+     * app to stop choosing; the two were conflated because both invalidate the current plan.
+     * The choice is held for this drive and automation carries on.
+     */
+    fun choose(context: DriveContext) {
+        if (ui.value.driving) return
+        cancelSelection()
+        contextVersion++
+        manualContext = context
+        viewModelScope.launch { coordinator.invalidate() }
+        mutable.update { it.copy(context=context) }
+        recommend()
+    }
+    /** Held for this drive. A new session clears it; a reconnection within the session does not. */
+    @Volatile private var manualContext: DriveContext? = null
 
     /** §8.5 — sign-in never appears while driving; Spotify consent runs in the browser when parked. */
     fun linkAccount(interactive: Boolean = true) {
@@ -648,6 +664,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun feedback(id: String, feedback: String) { if(!ui.value.driving) viewModelScope.launch { dao.feedback(id,feedback);message("의견을 기록했습니다") } }
     fun registerVehicle(id: String,name: String) { if(ui.value.driving) return; viewModelScope.launch { prefs.string("vehicleId",id); prefs.string("vehicleName",name); prefs.flag("connected",false); message("차량을 등록했습니다. 다음 연결부터 감지합니다") } }
     fun classifyNow() {
+        val manual = manualContext
+        if (manual != null) {
+            // §7 priority: a direct choice outranks inference for the rest of this drive.
+            mutable.update { it.copy(context=manual,reason="직접 선택한 상황을 이번 이동 동안 유지합니다") }
+            return
+        }
         val result = ContextEngine.classify(Signals(settings.value.connected,LocalDateTime.now()))
         mutable.update { it.copy(context=if(result.confidence>=.8) result.context else DriveContext.GENERAL_DRIVE,reason=result.reasons.joinToString(" · ")+" · 확신도 ${(result.confidence*100).toInt()}%") }
     }
