@@ -305,4 +305,111 @@ class CommuteScheduleTest {
         val none = schedule(id = "none", days = emptySet())
         assertEquals(listOf(none), CommuteCodec.decode(CommuteCodec.encode(listOf(none))))
     }
+
+    // --- the 0.14.0 JSON has to keep reading, or upgrading empties the setup ---
+
+    /** Byte-for-byte what 0.14.0's encoder wrote. */
+    private fun legacy(vararg records: String) = "[" + records.joinToString(",") + "]"
+
+    @Test fun theOldJsonStillReads() {
+        val raw = legacy("""{"id":"commute.TO_WORK","direction":"TO_WORK","weekdays":["MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY"],"departure":"07:30","before":30,"after":30,"zone":"Asia/Seoul","enabled":true,"revision":4}""")
+        val decoded = CommuteCodec.decode(raw)
+        assertEquals(1, decoded.size)
+        val s = decoded.single()
+        assertEquals("commute.TO_WORK", s.id)
+        assertEquals(CommuteDirection.TO_WORK, s.direction)
+        assertEquals(CommuteSchedules.WEEKDAYS, s.weekdays)
+        assertEquals(LocalTime.parse("07:30"), s.departureLocalTime)
+        assertEquals(30, s.beforeMinutes)
+        assertEquals(30, s.afterMinutes)
+        assertEquals("Asia/Seoul", s.timezoneId)
+        assertTrue(s.enabled)
+        assertEquals(4, s.revision)
+    }
+
+    @Test fun bothOldRecordsSurviveAndConvertToTheNewForm() {
+        val raw = legacy(
+            """{"id":"commute.TO_WORK","direction":"TO_WORK","weekdays":["MONDAY"],"departure":"08:00","before":15,"after":45,"zone":"Asia/Seoul","enabled":true,"revision":1}""",
+            """{"id":"commute.TO_HOME","direction":"TO_HOME","weekdays":["SATURDAY","SUNDAY"],"departure":"23:50","before":0,"after":120,"zone":"Europe/London","enabled":false,"revision":9}""")
+        val decoded = CommuteCodec.decode(raw)
+        assertEquals(2, decoded.size)
+        assertFalse(decoded[1].enabled)
+        assertEquals("Europe/London", decoded[1].timezoneId)
+        // Converting and reading back must land on exactly the same records, because the save
+        // path now confirms by comparing them.
+        assertEquals(decoded, CommuteCodec.decode(CommuteCodec.encode(decoded)))
+    }
+
+    @Test fun theTwoFormatsAreToldApartByTheirFirstCharacter() {
+        assertTrue(CommuteCodec.isLegacy("""[{"id":"a"}]"""))
+        assertTrue(CommuteCodec.isLegacy("""  [{"id":"a"}]"""))
+        assertFalse(CommuteCodec.isLegacy(CommuteCodec.encode(listOf(schedule()))))
+        assertFalse(CommuteCodec.isLegacy(""))
+    }
+
+    @Test fun oneBadOldRecordDoesNotDiscardTheGoodOne() {
+        val raw = legacy(
+            """{"id":"commute.TO_WORK","direction":"TO_WORK","weekdays":["MONDAY"],"departure":"08:00","before":15,"after":45,"zone":"Asia/Seoul","enabled":true,"revision":1}""",
+            """{"id":"broken","direction":"SIDEWAYS","departure":"nope"}""")
+        assertEquals(listOf("commute.TO_WORK"), CommuteCodec.decode(raw).map { it.id })
+    }
+
+    @Test fun anEmptyOldArrayIsNotAnError() {
+        assertEquals(emptyList<CommuteSchedule>(), CommuteCodec.decode("[]"))
+    }
+
+    // --- §5: a location answer arriving after the connection ended is not written back ---
+
+    private val start = 1_000_000L
+
+    @Test fun aFixArrivingAfterTheCarDisconnectedIsDiscarded() {
+        // The disconnect handler stamped an end time while captureDeparture was still waiting.
+        val decision = DepartureGate.decide(
+            startedAt = start, now = start + 5_000, connected = false,
+            storedDepartureAt = start, storedEndedAt = start + 3_000, offered = Zone.HOME)
+        assertEquals(DepartureDecision.Superseded, decision)
+    }
+
+    @Test fun aFixIsDiscardedEvenWhenTheEndTimeIsAllThatChanged() {
+        // Still nominally connected but the episode was closed: writing would clear endedAt.
+        assertEquals(DepartureDecision.Superseded, DepartureGate.decide(
+            start, start + 5_000, connected = true,
+            storedDepartureAt = start, storedEndedAt = start + 3_000, offered = Zone.HOME))
+    }
+
+    @Test fun aFixBelongingToAnEarlierEpisodeIsDiscarded() {
+        // Reconnected: a newer captureDeparture owns the target now.
+        assertEquals(DepartureDecision.Superseded, DepartureGate.decide(
+            start, start + 5_000, connected = true,
+            storedDepartureAt = start + 4_000, storedEndedAt = 0, offered = Zone.WORK))
+    }
+
+    @Test fun aTimelyFixOnTheCurrentEpisodeIsAdopted() {
+        assertEquals(DepartureDecision.Adopt(Zone.HOME), DepartureGate.decide(
+            start, start + 5_000, connected = true, storedDepartureAt = start, storedEndedAt = 0, offered = Zone.HOME))
+    }
+
+    @Test fun aLateFixIsRejectedRatherThanBackdated() {
+        val late = start + ContextFreshness.FIX_FOR_ZONE_MS + 1
+        assertEquals(DepartureDecision.Rejected(DepartureRejection.LATE_FIX), DepartureGate.decide(
+            start, late, connected = true, storedDepartureAt = start, storedEndedAt = 0, offered = Zone.HOME))
+        // Exactly on the boundary is still in time.
+        assertEquals(DepartureDecision.Adopt(Zone.HOME), DepartureGate.decide(
+            start, start + ContextFreshness.FIX_FOR_ZONE_MS, connected = true,
+            storedDepartureAt = start, storedEndedAt = 0, offered = Zone.HOME))
+    }
+
+    @Test fun noFixAtAllIsItsOwnAnswer() {
+        assertEquals(DepartureDecision.Rejected(DepartureRejection.NO_FIX), DepartureGate.decide(
+            start, start + 1_000, connected = true, storedDepartureAt = start, storedEndedAt = 0, offered = null))
+        assertEquals(DepartureDecision.Rejected(DepartureRejection.NO_FIX), DepartureGate.decide(
+            start, start + 1_000, connected = true, storedDepartureAt = start, storedEndedAt = 0, offered = Zone.UNKNOWN))
+    }
+
+    @Test fun anEndedEpisodeOutranksEvenALateFix() {
+        // Order matters: superseded is decided before the fix is examined at all.
+        assertEquals(DepartureDecision.Superseded, DepartureGate.decide(
+            start, start + ContextFreshness.FIX_FOR_ZONE_MS + 1, connected = false,
+            storedDepartureAt = start, storedEndedAt = start + 1, offered = Zone.HOME))
+    }
 }

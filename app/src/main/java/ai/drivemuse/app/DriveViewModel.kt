@@ -160,11 +160,28 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         // §3: the bottom notice is auxiliary. The authoritative state lives next to the control
         // that started the work; this only keeps the old global line honest.
         viewModelScope.launch {
+            // 0.14.0 wrote this key as JSON. Convert once, verify, and only then keep the new
+            // form; a failed conversion leaves the original where it is rather than clearing it.
+            val stored = prefs.flow.first().commuteJson
+            if (CommuteCodec.isLegacy(stored)) {
+                val recovered = CommuteCodec.decode(stored)
+                if (recovered.isEmpty()) prefs.string("commuteSchedules","")
+                else {
+                    prefs.string("commuteSchedules",CommuteCodec.encode(recovered))
+                    if (CommuteCodec.decode(prefs.flow.first().commuteJson) != recovered) {
+                        prefs.string("commuteSchedules",stored)
+                        message("출퇴근 일정을 새 형식으로 옮기지 못했어요. 설정에서 확인해 주세요")
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
             settings.distinctUntilChangedBy { it.connected }.collect { config ->
                 val now = System.currentTimeMillis()
                 if (!config.connected) {
                     // Mark the end rather than erase: §5 lets a reconnection inside ten minutes
                     // continue the same drive, and that includes where it started.
+                    operations.cancel(OperationRegistry.DEPARTURE)
                     if (config.departureAt != 0L && config.departureEndedAt == 0L)
                         prefs.departure(config.departureAt, config.departureZone, now)
                     classifyNow(); return@collect
@@ -848,22 +865,37 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             classifyNow(origin = Zone.UNKNOWN, departedAt = startedAt)
             op.stage(OperationStage.CONNECTING)
             val outcome = location.refresh()
+            locationStatusMutable.value = outcome.status
             val now = System.currentTimeMillis()
             val offered = outcome.region?.takeIf { ContextFreshness.zoneUsable(it.measuredAt,now) }?.zone
-            // A fix that arrived too late describes where the car has reached, not where it set
-            // off, so it is refused — and the message has to report the refusal, not the fix.
-            val adopted = offered?.takeIf { now - startedAt <= ContextFreshness.FIX_FOR_ZONE_MS }
-            if (adopted != null) { prefs.departure(startedAt, adopted.name, 0); region = outcome.region }
-            locationStatusMutable.value = outcome.status
-            contextVersion++
-            classifyNow(origin = adopted ?: Zone.UNKNOWN, departedAt = startedAt)
-            op.confirm(when {
-                adopted == Zone.HOME -> "집에서 출발"
-                adopted == Zone.WORK -> "회사에서 출발"
-                adopted != null -> "등록하지 않은 장소에서 출발"
-                offered != null -> "출발 영역 미확인 · 위치가 출발 시점보다 늦게 확인돼 사용하지 않았어요"
-                else -> "출발 영역 미확인 · ${outcome.status.advice.ifBlank { "위치를 확인하지 못했어요" }}"
-            })
+            // Re-read rather than trust the snapshot taken before the wait: the car may have been
+            // unplugged during it, and writing then would clear the end time and resurrect the
+            // finished episode.
+            val current = prefs.flow.first()
+            when (val decision = DepartureGate.decide(startedAt,now,current.connected,current.departureAt,current.departureEndedAt,offered)) {
+                is DepartureDecision.Adopt -> {
+                    prefs.departure(startedAt,decision.zone.name,0)
+                    region = outcome.region
+                    contextVersion++
+                    classifyNow(origin = decision.zone, departedAt = startedAt)
+                    op.confirm(when (decision.zone) {
+                        Zone.HOME -> "집에서 출발"
+                        Zone.WORK -> "회사에서 출발"
+                        else -> "등록하지 않은 장소에서 출발"
+                    })
+                }
+                DepartureDecision.Superseded -> {
+                    classifyNow()
+                    op.discard("연결이 끝나 이 출발 기록은 사용하지 않았어요")
+                }
+                is DepartureDecision.Rejected -> {
+                    contextVersion++
+                    classifyNow(origin = Zone.UNKNOWN, departedAt = startedAt)
+                    op.confirm(if (decision.reason == DepartureRejection.NO_FIX)
+                        "${decision.reason.detail} · ${outcome.status.advice.ifBlank { "위치를 확인하지 못했어요" }}"
+                        else decision.reason.detail)
+                }
+            }
         }
     }
 
@@ -885,11 +917,18 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         }
     }
 
-    fun deleteSchedule(id: String) {
-        if (ui.value.driving) return
-        viewModelScope.launch {
-            prefs.string("commuteSchedules",CommuteCodec.encode(schedules.value.filterNot { it.id == id }))
-            contextVersion++; classifyNow(scheduleList = CommuteCodec.decode(prefs.flow.first().commuteJson)); message("일정을 삭제했습니다")
+    fun deleteSchedule(direction: CommuteDirection, id: String) {
+        if (ui.value.driving) { message("정차 후 설정해 주세요"); return }
+        operations.start(OperationKind.SAVE,OperationRegistry.schedule(direction.name)) { op ->
+            val intended = schedules.value.filterNot { it.id == id }
+            prefs.string("commuteSchedules",CommuteCodec.encode(intended))
+            // Same standard as saving: the list on disk has to be the list that was meant, not
+            // merely a list that came back.
+            val readBack = CommuteCodec.decode(prefs.flow.first().commuteJson)
+            if (readBack != intended) error("일정을 삭제하지 못했어요 · 다시 시도해 주세요")
+            contextVersion++
+            classifyNow(scheduleList = readBack)
+            op.confirm("${direction.label} 일정을 삭제했어요")
         }
     }
     fun disconnect() {

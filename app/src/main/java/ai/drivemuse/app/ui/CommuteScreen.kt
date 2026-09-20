@@ -54,8 +54,8 @@ private fun blank(direction: CommuteDirection) = CommuteSchedule(
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         SettingsTitle("출퇴근과 이동 판단", "설정한 시간과 출발 장소로 상황을 추정합니다. 설정하지 않아도 일반 선곡은 그대로 동작해요")
 
-        ScheduleCard(morning, zones, driving, vm, onChange = { morning = it })
-        ScheduleCard(evening, zones, driving, vm, onChange = { evening = it },
+        ScheduleCard(morning, zones, driving, vm, saved = stored.any { it.id == morning.id }, onChange = { morning = it })
+        ScheduleCard(evening, zones, driving, vm, saved = stored.any { it.id == evening.id }, onChange = { evening = it },
             onCopyDays = { evening = CommuteSchedules.copyWeekdays(morning, evening) })
 
         GlassSurface {
@@ -86,6 +86,7 @@ private fun blank(direction: CommuteDirection) = CommuteSchedule(
     zones: Set<Zone>,
     driving: Boolean,
     vm: DriveViewModel,
+    saved: Boolean,
     onChange: (CommuteSchedule) -> Unit,
     onCopyDays: (() -> Unit)? = null
 ) {
@@ -144,6 +145,11 @@ private fun blank(direction: CommuteDirection) = CommuteSchedule(
             fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Cyan)
 
         DriveButton("${schedule.direction.label} 일정 저장", !driving) { vm.saveSchedule(schedule) }
+        // Delete shares the card's operation target, so the two cannot run at once and the result
+        // of whichever ran appears in the same place.
+        if (saved) TextButton(onClick = { vm.deleteSchedule(schedule.direction, schedule.id) }, enabled = !driving) {
+            Text("${schedule.direction.label} 일정 삭제")
+        }
         OperationStatus(rememberOperation(vm, OperationRegistry.schedule(schedule.direction.name)),
             onDismiss = { vm.dismissOperation(OperationRegistry.schedule(schedule.direction.name)) },
             onRetry = { vm.saveSchedule(schedule) })

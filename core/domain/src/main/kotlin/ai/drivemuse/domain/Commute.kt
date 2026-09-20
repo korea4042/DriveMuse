@@ -302,8 +302,14 @@ object CommuteCodec {
      * taking every other schedule down with it. Losing a whole commute setup because one field
      * went bad in an upgrade is the worse failure.
      */
+    /** True when the stored value is still in the 0.14.0 JSON shape and needs converting. */
+    fun isLegacy(raw: String) = raw.trimStart().startsWith("[")
+
     fun decode(raw: String): List<CommuteSchedule> {
         if (raw.isBlank()) return emptyList()
+        // 0.14.0 wrote JSON under this same key. Replacing the codec without reading the old shape
+        // would have silently emptied every existing user's commute setup on upgrade.
+        if (isLegacy(raw)) return decodeLegacyJson(raw)
         return raw.split(RECORD).mapNotNull { record ->
             runCatching {
                 val f = record.split(FIELD)
@@ -322,5 +328,101 @@ object CommuteCodec {
                 )
             }.getOrNull()
         }
+    }
+}
+
+/**
+ * Reader for the 0.14.0 JSON encoding, kept only so upgrades do not lose the user's schedules.
+ *
+ * Hand-written rather than `org.json`, which is a stub on the unit-test classpath: a migration
+ * that cannot be tested is a migration nobody finds out about until the upgrade ships. It reads
+ * only the shape this app emitted and gives up on anything else, one record at a time.
+ */
+private fun decodeLegacyJson(raw: String): List<CommuteSchedule> =
+    splitTopLevel(raw.trim().removePrefix("[").removeSuffix("]"), ',').mapNotNull { record ->
+        runCatching {
+            val fields = readObject(record)
+            CommuteSchedule(
+                id = fields.getValue("id").also { require(it.isNotBlank()) },
+                direction = CommuteDirection.valueOf(fields.getValue("direction")),
+                weekdays = (fields["weekdays"] ?: "").removePrefix("[").removeSuffix("]")
+                    .split(',').map { it.trim().trim('"') }.filter { it.isNotBlank() }
+                    .mapNotNull { d -> runCatching { java.time.DayOfWeek.valueOf(d) }.getOrNull() }.toSet(),
+                departureLocalTime = java.time.LocalTime.parse(fields.getValue("departure")),
+                beforeMinutes = (fields["before"]?.toIntOrNull() ?: 30).coerceIn(0, 180),
+                afterMinutes = (fields["after"]?.toIntOrNull() ?: 30).coerceIn(0, 180),
+                timezoneId = fields["zone"]?.ifBlank { null } ?: java.time.ZoneId.systemDefault().id,
+                enabled = fields["enabled"] != "false",
+                revision = fields["revision"]?.toIntOrNull() ?: 0
+            )
+        }.getOrNull()
+    }
+
+/** Splits on [separator] only where brace, bracket and quote nesting is back at the top level. */
+private fun splitTopLevel(text: String, separator: Char): List<String> {
+    val parts = mutableListOf<String>()
+    val current = StringBuilder()
+    var depth = 0; var inString = false; var escaped = false
+    for (c in text) {
+        when {
+            escaped -> escaped = false
+            c == '\\' && inString -> escaped = true
+            c == '"' -> inString = !inString
+            inString -> Unit
+            c == '{' || c == '[' -> depth++
+            c == '}' || c == ']' -> depth--
+            c == separator && depth == 0 -> { parts += current.toString(); current.clear(); continue }
+        }
+        current.append(c)
+    }
+    if (current.isNotBlank()) parts += current.toString()
+    return parts.filter { it.isNotBlank() }
+}
+
+/** `{"a":1,"b":["x"]}` to `{a=1, b=["x"]}`. Strings lose their quotes; everything else is verbatim. */
+private fun readObject(record: String): Map<String, String> =
+    splitTopLevel(record.trim().removePrefix("{").removeSuffix("}"), ',').mapNotNull { pair ->
+        val parts = splitTopLevel(pair, ':')
+        if (parts.size < 2) null
+        else parts[0].trim().trim('"') to parts.drop(1).joinToString(":").trim().let {
+            if (it.startsWith("\"") && it.endsWith("\"")) it.substring(1, it.length - 1) else it
+        }
+    }.toMap()
+
+/**
+ * §5: a location answer may only be written back by the connection episode that asked for it.
+ *
+ * captureDeparture waits up to fifteen seconds for a fix. If the car disconnects in that window
+ * the disconnect handler records the end — and the callback then arriving would write
+ * `endedAt = 0` and resurrect a finished episode, so the next connection would resume a drive that
+ * had already ended from a departure point that was never adopted.
+ */
+enum class DepartureRejection(val detail: String) {
+    LATE_FIX("출발 영역 미확인 · 위치가 출발 시점보다 늦게 확인돼 사용하지 않았어요"),
+    NO_FIX("출발 영역 미확인")
+}
+
+sealed interface DepartureDecision {
+    data class Adopt(val zone: Zone) : DepartureDecision
+    /** The episode ended or was replaced while the fix was in flight. Write nothing. */
+    data object Superseded : DepartureDecision
+    data class Rejected(val reason: DepartureRejection) : DepartureDecision
+}
+
+object DepartureGate {
+    fun decide(
+        startedAt: Long,
+        now: Long,
+        connected: Boolean,
+        storedDepartureAt: Long,
+        storedEndedAt: Long,
+        offered: Zone?
+    ): DepartureDecision {
+        // Checked before the fix is even looked at: a perfectly good fix still must not be written
+        // to an episode that is over.
+        if (!connected || storedDepartureAt != startedAt || storedEndedAt != 0L) return DepartureDecision.Superseded
+        if (offered == null || offered == Zone.UNKNOWN) return DepartureDecision.Rejected(DepartureRejection.NO_FIX)
+        if (now - startedAt > ContextFreshness.FIX_FOR_ZONE_MS) return DepartureDecision.Rejected(DepartureRejection.LATE_FIX)
+        return DepartureDecision.Adopt(offered)
     }
 }
