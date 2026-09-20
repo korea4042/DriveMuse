@@ -1,9 +1,23 @@
-e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/test/kotlin/ai/drivemuse/domain/CommuteScheduleTest.kt:119:65 Argument type mismatch: actual type is 'List<CommuteSchedule>', but 'ZonedDateTime?' was expected.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Providers.kt:10:12 Redeclaration:
+enum class Capability : Enum<Capability>
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:47:12 Redeclaration:
+enum class Capability : Enum<Capability>
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:48:14 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:48:22 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:49:15 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:49:24 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:51:13 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:51:23 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:52:17 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:52:24 Too many arguments for 'constructor(): Capability'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:69:45 Unresolved reference 'UNTESTED'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:80:34 Unresolved reference 'UNTESTED'.
+e: file:///home/runner/work/DriveMuse/DriveMuse/core/domain/src/main/kotlin/ai/drivemuse/domain/Steering.kt:84:35 Unresolved reference 'usable'.
 
-> Task :app:kspDebugKotlin
+> Task :core:domain:compileKotlin FAILED
 --
 FAILURE: Build failed with an exception.
 
 * What went wrong:
-Execution failed for task ':core:domain:compileTestKotlin'.
+Execution failed for task ':core:domain:compileKotlin'.
 > A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
