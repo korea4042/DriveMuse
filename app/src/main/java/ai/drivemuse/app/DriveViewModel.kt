@@ -337,8 +337,15 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      */
     private suspend fun syncContextQuietly(known: Region? = null) = contextSync.withLock {
         val fixed = known ?: location.refresh().let { outcome ->
-            locationStatusMutable.value = outcome.status
-            outcome.region ?: location.lastKnown()
+            val fallback = outcome.region ?: location.lastKnown()
+            // A tick in the background is usually refused a fresh fix: the app holds foreground-only
+            // location permission and runs no location service, so once the screen is off and
+            // Spotify is in front the OS answers with nothing. The last fix is still the region the
+            // forecast belongs to, and reporting TIMEOUT over a position the app is still using
+            // would have the settings screen say the location failed when nothing it shows has.
+            // A failure with nothing to fall back on is still reported, because then it is one.
+            if (outcome.available || fallback == null) locationStatusMutable.value = outcome.status
+            fallback
         }
         if (fixed != null) region = fixed
         val before = weatherFact?.fetchedAt
