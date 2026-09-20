@@ -212,4 +212,96 @@ class CommuteScheduleTest {
     @Test fun theRouteLayerIsHonestAboutNotBeingThereYet() {
         assertTrue(MissingSignal.ROUTE in ContextEstimator.assess(input()).missing)
     }
+
+    // --- the schedule is judged at the departure, not at every reassessment ---
+
+    @Test fun aCommuteSurvivesBeingReassessedAfterTheWindowCloses() {
+        // Left home at 07:50, inside 07:00~08:00. Reassessed at 08:31, well outside it.
+        val a = ContextEstimator.assess(ContextInput(
+            connected = true,
+            at = at("2026-09-21", "08:31"),
+            originZone = Zone.HOME,
+            departedAt = at("2026-09-21", "07:50"),
+            schedules = listOf(schedule())))
+        assertEquals(ContextPurpose.COMMUTE_TO_WORK, a.purpose)
+    }
+
+    @Test fun theTimeBandStillFollowsTheClockNotTheDeparture() {
+        // Set off at 21:00, still driving at 23:30: the commute holds and the band turns to night.
+        val evening = schedule(id = "e", direction = CommuteDirection.TO_HOME, departure = "21:00")
+        val a = ContextEstimator.assess(ContextInput(
+            connected = true,
+            at = at("2026-09-21", "23:30"),
+            originZone = Zone.WORK,
+            departedAt = at("2026-09-21", "21:00"),
+            schedules = listOf(evening)))
+        assertEquals(ContextPurpose.COMMUTE_HOME, a.purpose)
+        assertEquals(TimeBand.NIGHT, a.timeBand)
+    }
+
+    @Test fun withoutADepartureTheClockStandsIn() {
+        val a = ContextEstimator.assess(ContextInput(
+            connected = true, at = at("2026-09-21", "07:30"), originZone = Zone.HOME, schedules = listOf(schedule())))
+        assertEquals(ContextPurpose.COMMUTE_TO_WORK, a.purpose)
+    }
+
+    // --- the direction that agrees with the departure zone is chosen first ---
+
+    @Test fun aNearerScheduleInTheWrongDirectionDoesNotHideTheRightOne() {
+        // Both windows are open at 16:50. 퇴근 is nearer, but the car left home, so it is 출근.
+        val morning = schedule(id = "m", departure = "08:00", before = 0, after = 9 * 60)
+        val evening = schedule(id = "e", direction = CommuteDirection.TO_HOME, departure = "17:00", before = 60, after = 60)
+        val a = ContextEstimator.assess(ContextInput(
+            connected = true, at = at("2026-09-21", "16:50"), originZone = Zone.HOME,
+            departedAt = at("2026-09-21", "16:50"), schedules = listOf(morning, evening)))
+        assertEquals(ContextPurpose.COMMUTE_TO_WORK, a.purpose)
+        assertTrue(ContextEvidence.ORIGIN_HOME in a.evidence)
+    }
+
+    @Test fun matchFromKeepsTheNearestAmongTheCompatibleOnes() {
+        val early = schedule(id = "a", departure = "07:00", before = 60, after = 120)
+        val late = schedule(id = "b", departure = "09:00", before = 120, after = 60)
+        val wrongWay = schedule(id = "z", direction = CommuteDirection.TO_HOME, departure = "08:10", before = 60, after = 60)
+        val all = listOf(early, late, wrongWay)
+        assertEquals("z", CommuteSchedules.match(all, at("2026-09-21", "08:10"))?.id)
+        assertEquals("a", CommuteSchedules.matchFrom(all, at("2026-09-21", "07:40"), Zone.HOME)?.id)
+        assertEquals("b", CommuteSchedules.matchFrom(all, at("2026-09-21", "08:40"), Zone.HOME)?.id)
+        assertEquals("z", CommuteSchedules.matchFrom(all, at("2026-09-21", "08:10"), Zone.WORK)?.id)
+        assertNull(CommuteSchedules.matchFrom(all, at("2026-09-21", "08:10"), Zone.UNKNOWN))
+    }
+
+    @Test fun theScheduleEvidenceStillShowsWhenOnlyTheWrongDirectionMatches() {
+        val evening = schedule(id = "e", direction = CommuteDirection.TO_HOME, departure = "18:30")
+        val a = ContextEstimator.assess(ContextInput(
+            connected = true, at = at("2026-09-21", "18:30"), originZone = Zone.HOME, schedules = listOf(evening)))
+        assertEquals(ContextPurpose.GENERAL, a.purpose)
+        assertTrue(ContextEvidence.SCHEDULE_MATCH in a.evidence)
+    }
+
+    // --- the codec: saving verifies by comparing the record that comes back ---
+
+    @Test fun everyFieldSurvivesTheRoundTrip() {
+        val all = listOf(
+            schedule(id = "commute.TO_WORK", days = CommuteSchedules.WEEKDAYS, departure = "07:05", before = 45, after = 15).copy(revision = 7),
+            schedule(id = "commute.TO_HOME", direction = CommuteDirection.TO_HOME, days = setOf(DayOfWeek.SATURDAY),
+                departure = "23:50", before = 0, after = 120, zone = "Europe/London").copy(enabled = false, revision = 2))
+        assertEquals(all, CommuteCodec.decode(CommuteCodec.encode(all)))
+    }
+
+    @Test fun anEmptyStoreIsAnEmptyList() {
+        assertEquals(emptyList<CommuteSchedule>(), CommuteCodec.decode(""))
+        assertEquals(emptyList<CommuteSchedule>(), CommuteCodec.decode(CommuteCodec.encode(emptyList())))
+    }
+
+    @Test fun oneUnreadableRecordDoesNotTakeTheOthersWithIt() {
+        val good = schedule(id = "good")
+        val raw = CommuteCodec.encode(listOf(good)) + "" + "v1brokenNOT_A_DIRECTION"
+        assertEquals(listOf(good), CommuteCodec.decode(raw))
+        assertEquals(emptyList<CommuteSchedule>(), CommuteCodec.decode("garbage"))
+    }
+
+    @Test fun aScheduleWithNoDaysRoundTripsAsItself() {
+        val none = schedule(id = "none", days = emptySet())
+        assertEquals(listOf(none), CommuteCodec.decode(CommuteCodec.encode(listOf(none))))
+    }
 }

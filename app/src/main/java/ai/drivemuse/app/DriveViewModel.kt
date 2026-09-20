@@ -98,13 +98,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val locationStatusMutable=MutableStateFlow<LocationStatus?>(null)
     val locationStatus=locationStatusMutable.asStateFlow()
     private var contextVersion=0L
-    /**
-     * §5: the departure, captured once when the car connects. The old code used the most recent
-     * position as the origin, so ten minutes into a drive the "출발 영역" was wherever the car had
-     * got to — which is never HOME and so never matched a commute.
-     */
-    private var departureAt=0L
-    @Volatile private var departureZone=Zone.UNKNOWN
     private var contextJob: Job?=null
     /**
      * §7: the id is loaded from disk and only rolls over after 30 minutes of inactivity, so session
@@ -148,7 +141,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val repository = runtime.music
     val settings = prefs.flow.stateIn(viewModelScope,SharingStarted.Eagerly,Settings())
     /** Declared after `settings`: a property initialiser cannot read one defined below it. */
-    val schedules = settings.map { CommuteStore.decode(it.commuteJson) }
+    val schedules = settings.map { CommuteCodec.decode(it.commuteJson) }
         .stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
     val rules = dao.rules().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
     val history = dao.history().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
@@ -167,8 +160,23 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         // §3: the bottom notice is auxiliary. The authoritative state lives next to the control
         // that started the work; this only keeps the old global line honest.
         viewModelScope.launch {
-            settings.map { it.connected }.distinctUntilChanged().collect { connected ->
-                if (connected) captureDeparture() else classifyNow()
+            settings.distinctUntilChangedBy { it.connected }.collect { config ->
+                val now = System.currentTimeMillis()
+                if (!config.connected) {
+                    // Mark the end rather than erase: §5 lets a reconnection inside ten minutes
+                    // continue the same drive, and that includes where it started.
+                    if (config.departureAt != 0L && config.departureEndedAt == 0L)
+                        prefs.departure(config.departureAt, config.departureZone, now)
+                    classifyNow(); return@collect
+                }
+                val resumable = config.departureAt != 0L &&
+                    (config.departureEndedAt == 0L || now - config.departureEndedAt <= ContextFreshness.SESSION_RESUME_MS)
+                if (resumable) {
+                    // Also the ViewModel-recreated-mid-drive case: there is already a departure,
+                    // so taking a fresh fix here would move it to wherever the car has reached.
+                    if (config.departureEndedAt != 0L) prefs.departure(config.departureAt, config.departureZone, 0)
+                    classifyNow()
+                } else captureDeparture()
             }
         }
         viewModelScope.launch {
@@ -309,7 +317,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             else error("등록하지 못했어요 · ${status.advice}")
         }
     }
-    fun deleteZones() { if(ui.value.driving) return;contextJob?.cancel();location.deleteZones();region=null;weatherFact=null;departureZone=Zone.UNKNOWN;weather.clear();contextVersion++;cancelSelection();viewModelScope.launch { coordinator.invalidate() };message("등록 영역을 삭제했습니다") }
+    fun deleteZones() { if(ui.value.driving) return;contextJob?.cancel();location.deleteZones();region=null;weatherFact=null;viewModelScope.launch { prefs.departure(0,Zone.UNKNOWN.name,0) };weather.clear();contextVersion++;cancelSelection();viewModelScope.launch { coordinator.invalidate() };message("등록 영역을 삭제했습니다") }
     fun rate(track: Track, positive: Boolean) {
         if(ui.value.driving || ui.value.demo) return
         cancelSelection()
@@ -796,15 +804,22 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * The judgement stands on its stated evidence, and separately does not authorise playback —
      * the playback controller checks connection, stop state and epoch for itself.
      */
-    fun classifyNow() {
+    /**
+     * [origin], [scheduleList] and [departedAt] override what the stored settings say, for the
+     * moment just after a write when DataStore has not yet emitted the new value. Passing the
+     * values that were verified on disk beats assessing against a flow that is still catching up.
+     */
+    fun classifyNow(origin: Zone? = null, scheduleList: List<CommuteSchedule>? = null, departedAt: Long? = null) {
         val config = settings.value
         val manual = manualContext
+        val departure = departedAt ?: config.departureAt.takeIf { it != 0L }
         val assessment = ContextEstimator.assess(ContextInput(
             connected = config.connected,
             at = ZonedDateTime.now(),
             manual = manual?.let { purposeOf(it) },
-            originZone = departureZone,
-            schedules = schedules.value,
+            originZone = origin ?: runCatching { Zone.valueOf(config.departureZone) }.getOrDefault(Zone.UNKNOWN),
+            departedAt = departure?.let { java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneId.systemDefault()) },
+            schedules = scheduleList ?: schedules.value,
             nightStart = LocalTime.ofSecondOfDay(config.nightStartMinutes * 60L),
             nightEnd = LocalTime.ofSecondOfDay(config.nightEndMinutes * 60L),
             assessedAt = System.currentTimeMillis(),
@@ -827,25 +842,26 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      * back-dated into the departure.
      */
     private fun captureDeparture() {
-        departureAt = System.currentTimeMillis()
-        departureZone = Zone.UNKNOWN
-        classifyNow()
+        val startedAt = System.currentTimeMillis()
         operations.start(OperationKind.LOCATION,OperationRegistry.DEPARTURE) { op ->
+            prefs.departure(startedAt, Zone.UNKNOWN.name, 0)
+            classifyNow(origin = Zone.UNKNOWN, departedAt = startedAt)
             op.stage(OperationStage.CONNECTING)
             val outcome = location.refresh()
             val now = System.currentTimeMillis()
-            val zone = outcome.region?.takeIf { ContextFreshness.zoneUsable(it.measuredAt,now) }?.zone
-            if (zone != null && now - departureAt <= ContextFreshness.FIX_FOR_ZONE_MS) {
-                departureZone = zone
-                region = outcome.region
-            }
+            val offered = outcome.region?.takeIf { ContextFreshness.zoneUsable(it.measuredAt,now) }?.zone
+            // A fix that arrived too late describes where the car has reached, not where it set
+            // off, so it is refused — and the message has to report the refusal, not the fix.
+            val adopted = offered?.takeIf { now - startedAt <= ContextFreshness.FIX_FOR_ZONE_MS }
+            if (adopted != null) { prefs.departure(startedAt, adopted.name, 0); region = outcome.region }
             locationStatusMutable.value = outcome.status
             contextVersion++
-            classifyNow()
+            classifyNow(origin = adopted ?: Zone.UNKNOWN, departedAt = startedAt)
             op.confirm(when {
-                zone == Zone.HOME -> "집에서 출발"
-                zone == Zone.WORK -> "회사에서 출발"
-                zone != null -> "등록하지 않은 장소에서 출발"
+                adopted == Zone.HOME -> "집에서 출발"
+                adopted == Zone.WORK -> "회사에서 출발"
+                adopted != null -> "등록하지 않은 장소에서 출발"
+                offered != null -> "출발 영역 미확인 · 위치가 출발 시점보다 늦게 확인돼 사용하지 않았어요"
                 else -> "출발 영역 미확인 · ${outcome.status.advice.ifBlank { "위치를 확인하지 못했어요" }}"
             })
         }
@@ -855,22 +871,25 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun saveSchedule(schedule: CommuteSchedule) {
         if (ui.value.driving) { message("정차 후 설정해 주세요"); return }
         operations.start(OperationKind.SAVE,OperationRegistry.schedule(schedule.direction.name)) { op ->
-            val next = schedules.value.filterNot { it.id == schedule.id } + schedule.copy(revision = schedule.revision + 1)
-            prefs.string("commuteSchedules",CommuteStore.encode(next))
-            // The stored value reading back is the evidence, not the write returning.
-            val stored = CommuteStore.decode(prefs.flow.first().commuteJson).any { it.id == schedule.id }
-            if (!stored) error("일정을 저장하지 못했어요")
+            val intended = schedule.copy(revision = schedule.revision + 1)
+            val next = schedules.value.filterNot { it.id == intended.id } + intended
+            prefs.string("commuteSchedules",CommuteCodec.encode(next))
+            // The evidence is the record on disk equalling what was meant to be written. Checking
+            // only that the id came back would confirm a save that changed nothing.
+            val readBack = CommuteCodec.decode(prefs.flow.first().commuteJson)
+            if (readBack.none { it == intended }) error("일정을 저장하지 못했어요 · 다시 시도해 주세요")
             contextVersion++
-            classifyNow()
-            op.confirm("${schedule.direction.label} 일정을 저장했어요 · ${schedule.windowLabel}")
+            // Assess against what was verified on disk; the schedules flow may not have emitted yet.
+            classifyNow(scheduleList = readBack)
+            op.confirm("${intended.direction.label} 일정을 저장했어요 · ${intended.windowLabel}")
         }
     }
 
     fun deleteSchedule(id: String) {
         if (ui.value.driving) return
         viewModelScope.launch {
-            prefs.string("commuteSchedules",CommuteStore.encode(schedules.value.filterNot { it.id == id }))
-            contextVersion++; classifyNow(); message("일정을 삭제했습니다")
+            prefs.string("commuteSchedules",CommuteCodec.encode(schedules.value.filterNot { it.id == id }))
+            contextVersion++; classifyNow(scheduleList = CommuteCodec.decode(prefs.flow.first().commuteJson)); message("일정을 삭제했습니다")
         }
     }
     fun disconnect() {
@@ -887,6 +906,6 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun resetAll() {
         if(ui.value.driving) return
         cancelSelection();accountJob?.cancel();surveyJob?.cancel();contextJob?.cancel();engine.clearCache()
-        edits.trySend { operations.run(OperationKind.RESET,OperationRegistry.RESET) { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearState();prefs.clear();observer.release();listeningMutable.value=ListeningSummary();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;departureZone=Zone.UNKNOWN;departureAt=0;progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() };message("앱을 초기화했습니다") }
+        edits.trySend { operations.run(OperationKind.RESET,OperationRegistry.RESET) { coordinator.invalidate();runtime.spotifyAuth.signOut();runtime.spotifyRemote.disconnect();repository.clearCache();dao.clearHistory();dao.clearRules();intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearState();prefs.clear();observer.release();listeningMutable.value=ListeningSummary();location.deleteZones();location.clear();weather.clear();region=null;weatherFact=null;prefs.departure(0,Zone.UNKNOWN.name,0);progress=DiscoveryProgress();seedRevision=-1L;firstMoodSession=null;contextVersion++;draftMutable.value=SurveyDraft();mutable.value=UiState() };message("앱을 초기화했습니다") }
     }
 }

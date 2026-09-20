@@ -19,6 +19,9 @@ object ContextFreshness {
      */
     const val FIX_FOR_REGION_MS = 3_600_000L
 
+    /** §5: a reconnection within ten minutes continues the same drive, departure point included. */
+    const val SESSION_RESUME_MS = 600_000L
+
     fun zoneUsable(measuredAt: Long, now: Long) = now - measuredAt in 0..FIX_FOR_ZONE_MS
     fun regionUsableForWeather(measuredAt: Long, now: Long) = now - measuredAt in 0..FIX_FOR_REGION_MS
 }

@@ -67,6 +67,10 @@ object CommuteSchedules {
     val WEEKDAYS = setOf(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY)
     val EVERY_DAY = DayOfWeek.entries.toSet()
 
+    /** 출근 leaves home, 퇴근 leaves work. There is no third reading of the departure zone. */
+    fun expectedOrigin(direction: CommuteDirection) =
+        if (direction == CommuteDirection.TO_WORK) Zone.HOME else Zone.WORK
+
     /**
      * The schedule covering [at], chosen deterministically when several overlap: nearest scheduled
      * departure first, then 출근 before 퇴근, then id. Overlapping schedules are a thing users will
@@ -76,6 +80,18 @@ object CommuteSchedules {
         schedules.mapNotNull { s -> s.minutesFromDeparture(at)?.let { s to abs(it) } }
             .minWithOrNull(compareBy({ it.second }, { it.first.direction.ordinal }, { it.first.id }))
             ?.first
+
+    /**
+     * The nearest schedule that the car could actually be on, given where it set off.
+     *
+     * Picking the nearest schedule first and checking the origin afterwards threw away real
+     * commutes: leaving home at 16:50 with a 17:00 퇴근 window and an 08:00–17:30 출근 window both
+     * open would choose 퇴근, find the origin was HOME rather than WORK, and fall through to a
+     * general drive — even though the 출근 schedule matched and agreed with the departure.
+     */
+    fun matchFrom(schedules: List<CommuteSchedule>, at: ZonedDateTime, origin: Zone): CommuteSchedule? =
+        if (origin == Zone.UNKNOWN) null
+        else match(schedules.filter { expectedOrigin(it.direction) == origin }, at)
 
     /** §3: 퇴근 copies 출근's days once, then diverges. No hidden two-way sync. */
     fun copyWeekdays(from: CommuteSchedule, to: CommuteSchedule) = to.copy(weekdays = from.weekdays, revision = to.revision + 1)
@@ -167,6 +183,13 @@ data class ContextInput(
     val manual: ContextPurpose? = null,
     /** The departure snapshot from §5, not the latest position sample. */
     val originZone: Zone = Zone.UNKNOWN,
+    /**
+     * When the drive began. The schedule is judged against this, not against [at]: a commute that
+     * started at 07:50 inside a 07:00–08:00 window is still a commute when reassessed at 08:01,
+     * and re-reading the clock every few minutes used to turn it into a general drive mid-drive.
+     * Null before a departure has been captured, in which case [at] stands in.
+     */
+    val departedAt: ZonedDateTime? = null,
     val schedules: List<CommuteSchedule> = emptyList(),
     val routeStatus: RouteStatus = RouteStatus.NOT_READY,
     val distanceMode: DistanceMode = DistanceMode.NORMAL,
@@ -230,23 +253,74 @@ object ContextEstimator {
         val usable = input.schedules.filter { it.enabled }
         if (usable.isEmpty()) missing += MissingSignal.SCHEDULE
 
-        // 2. Departure zone plus the user's own schedule.
-        val match = CommuteSchedules.match(usable, input.at)
+        // 2. Departure zone plus the user's own schedule, both read at the departure.
+        val judgedAt = input.departedAt ?: input.at
+        if (CommuteSchedules.match(usable, judgedAt) != null) evidence += ContextEvidence.SCHEDULE_MATCH
+        val match = CommuteSchedules.matchFrom(usable, judgedAt, input.originZone)
         if (match != null) {
-            evidence += ContextEvidence.SCHEDULE_MATCH
-            val expectedOrigin = if (match.direction == CommuteDirection.TO_WORK) Zone.HOME else Zone.WORK
-            if (input.originZone == expectedOrigin) {
-                // CTX10: the destination is never claimed. Leaving home inside the morning window
-                // is a commute hypothesis and the missing arrival stays on the screen.
-                missing += MissingSignal.DESTINATION
-                return result(
-                    if (match.direction == CommuteDirection.TO_WORK) ContextPurpose.COMMUTE_TO_WORK else ContextPurpose.COMMUTE_HOME,
-                    ContextBasis.ESTIMATED)
-            }
+            // CTX10: the destination is never claimed. Leaving home inside the morning window is a
+            // commute hypothesis and the missing arrival stays on the screen.
+            missing += MissingSignal.DESTINATION
+            return result(
+                if (match.direction == CommuteDirection.TO_WORK) ContextPurpose.COMMUTE_TO_WORK else ContextPurpose.COMMUTE_HOME,
+                ContextBasis.ESTIMATED)
         }
 
         // 3–4. Route-supported commutes outside the schedule, and travel, need learned routes.
         // Until those exist the honest answer is a general drive, not a guess dressed as one.
         return result(ContextPurpose.GENERAL, ContextBasis.ESTIMATED)
+    }
+}
+
+/**
+ * Serialisation for the preference store.
+ *
+ * Deliberately not JSON: the codec has to be covered by tests, and `org.json` is a stub on the
+ * unit-test classpath, so a JSON version could only be exercised on a device or behind an extra
+ * dependency. The round trip matters more than the format, because saving now confirms by reading
+ * the record back and comparing it — a codec that loses a field would make every save fail.
+ *
+ * Unit and record separators are used as delimiters; neither can occur in a zone id, a weekday
+ * name or an id this app generates.
+ */
+object CommuteCodec {
+    private const val FIELD = '\u001f'
+    private const val RECORD = '\u001e'
+    private const val VERSION = "v1"
+
+    fun encode(schedules: List<CommuteSchedule>): String = schedules.joinToString(RECORD.toString()) { s ->
+        listOf(
+            VERSION, s.id, s.direction.name,
+            s.weekdays.sortedBy { it.value }.joinToString(",") { it.name },
+            s.departureLocalTime.toString(), s.beforeMinutes.toString(), s.afterMinutes.toString(),
+            s.timezoneId, s.enabled.toString(), s.revision.toString()
+        ).joinToString(FIELD.toString())
+    }
+
+    /**
+     * Lenient per record, strict about the result: one unreadable row is dropped rather than
+     * taking every other schedule down with it. Losing a whole commute setup because one field
+     * went bad in an upgrade is the worse failure.
+     */
+    fun decode(raw: String): List<CommuteSchedule> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(RECORD).mapNotNull { record ->
+            runCatching {
+                val f = record.split(FIELD)
+                require(f.size >= 10 && f[0] == VERSION)
+                CommuteSchedule(
+                    id = f[1].also { require(it.isNotBlank()) },
+                    direction = CommuteDirection.valueOf(f[2]),
+                    weekdays = f[3].split(",").filter { it.isNotBlank() }
+                        .mapNotNull { d -> runCatching { java.time.DayOfWeek.valueOf(d) }.getOrNull() }.toSet(),
+                    departureLocalTime = java.time.LocalTime.parse(f[4]),
+                    beforeMinutes = f[5].toInt().coerceIn(0, 180),
+                    afterMinutes = f[6].toInt().coerceIn(0, 180),
+                    timezoneId = f[7].ifBlank { java.time.ZoneId.systemDefault().id },
+                    enabled = f[8].toBooleanStrict(),
+                    revision = f[9].toInt()
+                )
+            }.getOrNull()
+        }
     }
 }
