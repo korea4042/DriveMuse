@@ -62,15 +62,17 @@ class LearningStore(private val db: DriveDatabase) {
         return j.keys().asSequence().associateWith { j.getDouble(it)*decay }
     }
     suspend fun prune(now: Long)=db.withTransaction {
-        val dao=db.intelligence();val expired=dao.outcomes().filter { it.createdAt<now-2592000000L }
+        // Only implicit rows expire. pruneOutcomes would take explicit ratings with them, which
+        // made "explicit ratings survive" true only until the next 30 day sweep.
+        val dao=db.intelligence();val expired=dao.outcomes().filter { it.createdAt<now-2592000000L && !it.explicit }
         // Expiry used to roll the dying rows into a long-term archive. That archive is exactly the
         // derived profile, so while learning is blocked the rows simply expire.
         if(expired.isNotEmpty() && Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) {
             val values=archive(dao.state("learned_archive"),now).toMutableMap()
             PreferenceLearner.trackScores(expired.map(::outcome),now).forEach { (id,value) -> values[id]=((values[id]?:0.0)+value).coerceIn(-1.0,1.0) }
             dao.putState(IntelligenceState("learned_archive",JSONObject(values as Map<*,*>).toString(),now,now))
-            dao.pruneOutcomes(now-2592000000L)
-        } else if(expired.isNotEmpty()) dao.pruneOutcomes(now-2592000000L)
+            dao.pruneImplicitOutcomes(now-2592000000L)
+        } else if(expired.isNotEmpty()) dao.pruneImplicitOutcomes(now-2592000000L)
         dao.pruneBatches(now-2592000000L)
         dao.pruneEvents(now-2592000000L)
         dao.pruneAttempts(now-2592000000L)

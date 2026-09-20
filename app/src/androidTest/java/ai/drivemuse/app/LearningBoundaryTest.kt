@@ -1,9 +1,18 @@
 package ai.drivemuse.app
 
 import ai.drivemuse.app.learning.LearningStore
+import ai.drivemuse.app.playback.PlaybackObserver
+import ai.drivemuse.app.spotify.RemotePlayerState
 import ai.drivemuse.domain.EndJudgement
 import ai.drivemuse.domain.EndReason
+import ai.drivemuse.domain.EndTrigger
 import ai.drivemuse.domain.ListeningTotals
+import ai.drivemuse.domain.Track
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -103,5 +112,55 @@ class LearningBoundaryTest {
         learning.prune(now = 10_000_000_000L)
         assertNull(dao.state("learned_archive"))
         assertEquals(0, dao.implicitOutcomeCount())
+    }
+
+    /**
+     * The storage tests above prove the store refuses to write. This one drives the real observer,
+     * because the derivation being skipped matters as much as the row not being stored: aggregation
+     * and end-reason resolution must not run at all.
+     */
+    @Test fun observerPathDerivesNothing() = runBlocking {
+        val states = MutableStateFlow<RemotePlayerState?>(null)
+        val scope = CoroutineScope(Dispatchers.Default)
+        val observer = PlaybackObserver(db, learning, { "s1" })
+        observer.plan(null, listOf(Track("t1", "Title", "Artist")))
+        observer.start(scope, states)
+
+        // Playing, then a position well into the track, then paused: enough for a coverage ratio
+        // and a natural-end judgement to exist if anything were computing them.
+        states.value = RemotePlayerState("spotify:track:t1", "Title", "Artist", false, 1_000, 200_000, 1_000)
+        val confirmed = withTimeoutOrNull(5_000) {
+            var row = db.intelligence().latestAttemptFor("t1")
+            while (row == null) { delay(50); row = db.intelligence().latestAttemptFor("t1") }
+            row
+        }
+        requireNotNull(confirmed) { "the start was never confirmed" }
+        states.value = RemotePlayerState("spotify:track:t1", "Title", "Artist", false, 190_000, 200_000, 190_000)
+        delay(300)
+        observer.release(EndTrigger.SESSION_END)
+        observer.stop()
+        scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+
+        assertEquals(0, db.intelligence().implicitOutcomeCount(), "the observer path derived an outcome")
+        assertNull(db.intelligence().state("learned_archive"))
+        val closed = requireNotNull(db.intelligence().latestAttemptFor("t1"))
+        assertEquals("TERMINAL", closed.state, "the attempt was not closed")
+        // Transitions only: a per-tick position series is the raw material for a listening ratio.
+        val events = db.intelligence().eventsFor(closed.attemptId)
+        assertTrue(events.size <= 2, "raw position rows were stored: ${events.size}")
+    }
+
+    /** The retention split: expiry takes derived rows and leaves the user's own ratings. */
+    @Test fun expiryKeepsExplicitRatings() = runBlocking {
+        val dao = db.intelligence()
+        val old = 1_000L
+        dao.putAttempt(attempt("aged", "t1"))
+        dao.acceptOutcome(OutcomeEntity("aged", "t1", "s0", 1, -0.4, false, old, 4_000, 4_000, .02, false, "USER_NEXT", 1.0))
+        dao.acceptOutcome(OutcomeEntity("explicit:s0:t9", "t9", "s0", 1, 1.0, true, old))
+
+        learning.prune(now = old + 2592000000L + 1)
+
+        assertEquals(0, dao.implicitOutcomeCount(), "an expired implicit row survived")
+        assertEquals(1, dao.outcomes().count { it.explicit }, "an explicit rating was swept out by expiry")
     }
 }

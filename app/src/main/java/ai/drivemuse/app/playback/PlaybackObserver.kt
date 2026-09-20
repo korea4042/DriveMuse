@@ -47,6 +47,9 @@ class PlaybackObserver(
     private var lastStoredAt = 0L
     private var commandAt: Long? = null
     private val observations = mutableListOf<Observation>()
+    /** Transition tracking, so a control diagnostic row is written on change rather than on a tick. */
+    private var firstObservation = true
+    private var wasPaused: Boolean? = null
     /** Set when the player reports a recording the app did not queue (§30 suspend condition). */
     var unplannedTrackId: String? = null; private set
     /**
@@ -115,6 +118,7 @@ class PlaybackObserver(
             unplannedEpisode = false
             attempt = PlaybackAttemptEntity(UUID.randomUUID().toString(), id, session(), batch, ordinal, null, state.observedAt, null, null, "COMMANDED")
             durationMs = null; lastPositionMs = 0; lastStoredAt = 0; commandAt = null; observations.clear()
+            firstObservation = true; wasPaused = null
         }
         val open = attempt ?: return@withLock null
         durationMs = state.durationMs.takeIf { it > 0 } ?: durationMs
@@ -130,10 +134,20 @@ class PlaybackObserver(
             UUID.randomUUID().toString(), open.attemptId, state.observedAt, state.positionMs,
             if (state.paused) MediaState.PAUSED else MediaState.PLAYING
         )
-        observations += observation
-        // The player repeats itself while paused; store a row only when something actually moved.
-        val moved = observations.size == 1 || state.observedAt - lastStoredAt >= 1000
-        if (moved) {
+        val learning = Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED
+        // FIX-A. The in-memory series exists only to be aggregated into listening totals, so while
+        // learning is blocked it is not accumulated either.
+        if (learning) observations += observation
+        val stateChanged = wasPaused != state.paused
+        wasPaused = state.paused
+        // A row per second is the raw observation the listening ratio is computed from. Control
+        // diagnostics need to know that it started and whether it is paused, not where the
+        // playhead was at each tick, so while learning is blocked only transitions are stored.
+        val storeRow =
+            if (learning) firstObservation || state.observedAt - lastStoredAt >= 1000
+            else firstObservation || stateChanged
+        firstObservation = false
+        if (storeRow) {
             lastStoredAt = state.observedAt
             runCatching { db.intelligence().putEvent(PlaybackEventEntity(observation.id, open.attemptId, state.observedAt, state.positionMs, state.durationMs, state.paused, "APP_REMOTE")) }
         }
@@ -148,6 +162,14 @@ class PlaybackObserver(
         if (open.confirmedAt == null) {
             runCatching { db.intelligence().putAttempt(open.copy(endedAt = endedAt, state = "ABANDONED")) }
             observations.clear(); return
+        }
+        // FIX-A: the branch is before aggregation, not inside the store. Computing a coverage ratio
+        // and an end reason is the derivation itself; the attempt is still closed because that is
+        // playback control state.
+        if (!Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) {
+            runCatching { db.intelligence().putAttempt(open.copy(endedAt = endedAt, state = "TERMINAL")) }
+            observations.clear(); commandAt = null; durationMs = null; lastPositionMs = 0
+            return
         }
         val totals = ListeningAggregator.aggregate(observations.toList(), durationMs)
         val judgement = EndReasonResolver.resolve(AttemptClose(endedAt, lastPositionMs, durationMs, trigger, commandAt))

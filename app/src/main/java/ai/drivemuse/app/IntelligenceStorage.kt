@@ -50,6 +50,9 @@ data class PlaybackEventEntity(@PrimaryKey val eventId: String, val attemptId: S
     }
     @Insert(onConflict=OnConflictStrategy.REPLACE) abstract suspend fun putAttempt(row: PlaybackAttemptEntity)
     @Query("SELECT * FROM playback_attempt WHERE attemptId=:id") abstract suspend fun attempt(id: String): PlaybackAttemptEntity?
+    /** By recording rather than by attempt id, for checks that do not know the generated id. */
+    @Query("SELECT * FROM playback_attempt WHERE trackId=:trackId ORDER BY startedAt DESC LIMIT 1") abstract suspend fun latestAttemptFor(trackId: String): PlaybackAttemptEntity?
+    @Query("SELECT * FROM playback_event WHERE attemptId=:attemptId ORDER BY observedAt") abstract suspend fun eventsFor(attemptId: String): List<PlaybackEventEntity>
     @Insert(onConflict=OnConflictStrategy.IGNORE) abstract suspend fun putEvent(row: PlaybackEventEntity)
     @Query("SELECT * FROM playback_event WHERE attemptId=:id ORDER BY observedAt") abstract suspend fun events(id: String): List<PlaybackEventEntity>
     /**
@@ -66,6 +69,12 @@ data class PlaybackEventEntity(@PrimaryKey val eventId: String, val attemptId: S
     @Query("DELETE FROM playback_event") abstract suspend fun clearEvents()
     @Query("DELETE FROM playback_attempt") abstract suspend fun clearAttempts()
     @Query("DELETE FROM outcomes WHERE createdAt<:cutoff") abstract suspend fun pruneOutcomes(cutoff: Long)
+    /**
+     * Expiry applies to derived observation rows. An explicit rating is the user's own statement,
+     * on the same footing as a survey answer, so it is not swept out on a 30 day clock: it goes
+     * when the user clears their learning or their account, and not otherwise.
+     */
+    @Query("DELETE FROM outcomes WHERE explicit=0 AND createdAt<:cutoff") abstract suspend fun pruneImplicitOutcomes(cutoff: Long)
     @Query("DELETE FROM batches WHERE createdAt<:cutoff") abstract suspend fun pruneBatches(cutoff: Long)
     @Query("DELETE FROM outcomes") abstract suspend fun clearOutcomes()
     /** Implicit rows are the derived listening metrics; explicit ratings are the user's own words. */
