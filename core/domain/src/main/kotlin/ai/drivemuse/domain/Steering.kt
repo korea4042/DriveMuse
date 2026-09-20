@@ -193,6 +193,7 @@ internal data class ActivePress(
 
 internal data class PendingTap(
     val gestureId: String,
+    val key: SteeringKey,
     /** The DOWN of the first tap: the snapshot's age is measured from there, not from the second UP. */
     val downAt: Long,
     val upAt: Long,
@@ -255,7 +256,14 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
                 state.copy(press = null, pendingTap = null, blocked = state.blocked + press.key),
                 listOf(SteeringEffect.Discard(DiscardReason.STUCK_PRESS, null)))
         }
-        state.pendingTap?.takeIf { tapToken(it) == event.token }?.let {
+        state.pendingTap?.takeIf { tapToken(it) == event.token }?.let { tap ->
+            // §5.3 measures the gap from the first release to the second *press*, not to its
+            // release, so the second press can still be held when this timer comes due. Dropping
+            // the candidate here would turn an ordinary double tap — down at 300ms, held 100ms —
+            // into two unrelated first taps. The press standing in front of it is the pair.
+            val second = state.press
+            if (second != null && second.key == tap.key && second.downAt - tap.upAt <= thresholds.doubleTapGapMs)
+                return SteeringResult(state, emptyList())
             // The second tap never came. The first press already did its base action, so there is
             // nothing to undo and nothing to report.
             return SteeringResult(state.copy(pendingTap = null), emptyList())
@@ -399,7 +407,7 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
 
         // First short press of a possible pair. §5.3: a third press starts a new group rather than
         // pairing with the second, which is why the candidate is replaced rather than extended.
-        val tap = PendingTap(press.pressId, press.downAt, input.eventTimeElapsed, press.snapshot,
+        val tap = PendingTap(press.pressId, press.key, press.downAt, input.eventTimeElapsed, press.snapshot,
             press.connectionEpoch, press.mediaSessionEpoch, press.tripId)
         // One millisecond past the gap, because the gap itself is inclusive: a second DOWN landing
         // exactly on the boundary is a double tap, and a timer at the same instant would make the
@@ -463,6 +471,11 @@ class SteeringGestureReducer(private val thresholds: SteeringThresholds = Steeri
  */
 data class DiagnosticRun(
     val shortcut: Shortcut,
+    /**
+     * Verdicts the reducer reached for this mapping, not presses. One PLAY_PAUSE press is a
+     * candidate for both SC03 and SC04 and counting it against both made a working double tap
+     * look like one success in two tries, and SC04 like a failure that never happened.
+     */
     val attempts: Int = 0,
     val gesturesConfirmed: Int = 0,
     val baseDispatches: Int = 0,
