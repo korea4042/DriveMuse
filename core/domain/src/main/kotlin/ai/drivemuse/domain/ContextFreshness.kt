@@ -65,10 +65,22 @@ enum class LocationStatus {
  */
 enum class ContextRefresh(val detail: String) {
     REFRESHED("날씨를 갱신했어요"),
-    REUSED("새 위치를 확인하지 못해 직전에 받아둔 같은 지역 날씨를 그대로 씁니다"),
+    /**
+     * Why the cache was served is not knowable from the fact that it was: the lookup throttle holds
+     * for five minutes whether or not the position lookup worked. Saying "새 위치를 확인하지 못해"
+     * unconditionally asserted a cause that is often simply wrong.
+     */
+    REUSED("기존에 받아둔 같은 지역 날씨를 사용합니다"),
     NONE("날씨를 확인하지 못했어요");
 
     val refreshed get() = this == REFRESHED
+
+    /**
+     * [locationAdvice] is appended only for a reuse that followed a position failure the app
+     * actually observed. A successful fix plus a throttled lookup gets the plain sentence.
+     */
+    fun describe(locationAdvice: String? = null) =
+        if (this == REUSED && !locationAdvice.isNullOrBlank()) "$detail · $locationAdvice" else detail
 
     companion object {
         /**

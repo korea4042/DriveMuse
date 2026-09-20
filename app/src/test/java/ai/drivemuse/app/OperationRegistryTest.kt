@@ -5,6 +5,7 @@ import ai.drivemuse.domain.OperationKind
 import ai.drivemuse.domain.OperationPhase
 import ai.drivemuse.domain.OperationStage
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -13,6 +14,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -120,7 +125,62 @@ class OperationRegistryTest {
 
     // --- one entry per control ---
 
-    @Test fun aSecondPressOnABusyTargetIsRefused() = runBlocking {
+    /**
+     * Holds every dispatch until told, so a test can stand exactly where the bug was: after the
+     * state was published and before the body ran.
+     */
+    private class QueuedDispatcher : CoroutineDispatcher() {
+        private val queue = ConcurrentLinkedQueue<Runnable>()
+        override fun dispatch(context: CoroutineContext, block: Runnable) { queue.add(block) }
+        fun drain() { while (true) (queue.poll() ?: return).run() }
+    }
+
+    @Test fun twoPressesLandingBeforeTheFirstIsEvenDispatched() {
+        // The regression this guards: RUNNING used to be published inside the launched coroutine,
+        // so both presses saw an idle target. Waiting for the first body to start, as the earlier
+        // test did, cannot reach that window at all.
+        val dispatcher = QueuedDispatcher()
+        val paused = CoroutineScope(dispatcher + Job())
+        val registry = OperationRegistry(paused, { e -> e.message ?: "실패" })
+        val ran = AtomicInteger()
+        val first = registry.start(OperationKind.POOL, "pool") { ran.incrementAndGet(); it.confirm("한 번") }
+        val second = registry.start(OperationKind.POOL, "pool") { ran.incrementAndGet(); it.confirm("두 번") }
+        assertNotNull(first)
+        assertNull(second)
+        dispatcher.drain()
+        assertEquals(1, ran.get())
+        assertEquals("한 번", registry.of("pool")?.label(0))
+        paused.cancel()
+    }
+
+    @Test fun anOperationCancelledBeforeItsBodyRunsStillSettles() {
+        // Publishing RUNNING on the caller's thread means a cancel can arrive before the body
+        // exists to settle it. Without the completion hook the control stays spinning forever.
+        val dispatcher = QueuedDispatcher()
+        val paused = CoroutineScope(dispatcher + Job())
+        val registry = OperationRegistry(paused, { e -> e.message ?: "실패" })
+        val ran = AtomicBoolean(false)
+        registry.start(OperationKind.POOL, "pool") { ran.set(true) }
+        assertTrue(registry.of("pool")!!.running)
+        registry.cancel("pool")
+        dispatcher.drain()
+        val op = assertNotNull(registry.of("pool"))
+        assertFalse(ran.get())
+        assertEquals(OperationPhase.CANCELLED, op.phase)
+        paused.cancel()
+    }
+
+    @Test fun aScopeTornDownBeforeDispatchAlsoSettles() {
+        val dispatcher = QueuedDispatcher()
+        val paused = CoroutineScope(dispatcher + Job())
+        val registry = OperationRegistry(paused, { e -> e.message ?: "실패" })
+        registry.start(OperationKind.SELECTION, "sel") { it.confirm("절대 실행되지 않음") }
+        paused.cancel()
+        dispatcher.drain()
+        assertEquals(OperationPhase.CANCELLED, registry.of("sel")?.phase)
+    }
+
+    @Test fun aSecondPressOnceTheFirstIsRunningIsAlsoRefused() = runBlocking {
         val registry = registry()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

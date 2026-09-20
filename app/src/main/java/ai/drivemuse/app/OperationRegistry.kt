@@ -78,6 +78,19 @@ class OperationRegistry(
         val id = claim(kind, target) ?: return null
         val job = scope.launch { execute(id, kind, target, timeoutMs, block) }
         jobs[target] = job
+        // RUNNING is published before the coroutine is dispatched, so a cancel that lands in
+        // between — a scope torn down, a user cancelling immediately — leaves a body that never
+        // runs and therefore never settles. This is the only place that can see that happen.
+        job.invokeOnCompletion { cause ->
+            jobs.remove(target, job)
+            val current = mutable.value[target]
+            if (current?.id == id && current.running) settle(
+                target, id,
+                if (cause is CancellationException) OperationPhase.CANCELLED else OperationPhase.UNKNOWN,
+                if (cause is CancellationException) null else "시작하지 못했어요",
+                retryable = true
+            )
+        }
         return job
     }
 

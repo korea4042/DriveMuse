@@ -218,9 +218,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 weatherDetail=if(fact==null) "날씨 없음 · 지역 ${region?.id ?: "미확인"}"
                     else "출처 ${fact.source} · 지역 ${fact.region} · 관측 ${clock(fact.observedAt)} · 조회 ${clock(fact.fetchedAt)} · ${if(fact.stale(now)) "오래된 관측" else "최신"}") }
             val refresh=ContextRefresh.of(fact!=null,fact!=null && fact.fetchedAt!=fetchedBefore)
-            message(refresh.detail)
+            // Only a position failure the app observed is named as the cause; a reuse caused by
+            // the lookup throttle gets the plain sentence.
+            val described=refresh.describe(outcome.status.takeIf { it!=LocationStatus.AVAILABLE }?.advice)
+            message(described)
             when(refresh) {
-                ContextRefresh.REFRESHED, ContextRefresh.REUSED -> op.confirm(refresh.detail)
+                ContextRefresh.REFRESHED, ContextRefresh.REUSED -> op.confirm(described)
                 // There is something actionable to say here, so it is a failure with advice, not a
                 // success that happens to have no weather in it.
                 ContextRefresh.NONE -> error(outcome.status.advice.ifBlank { refresh.detail })

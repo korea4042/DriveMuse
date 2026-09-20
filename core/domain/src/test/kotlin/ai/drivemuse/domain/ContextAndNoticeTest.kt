@@ -85,6 +85,12 @@ class ContextAndNoticeTest {
         assertEquals(ContextRefresh.REUSED, ContextRefresh.of(hasUsableFact = true, fetchedAtChanged = false))
         assertEquals(ContextRefresh.NONE, ContextRefresh.of(hasUsableFact = false, fetchedAtChanged = false))
         assertFalse(ContextRefresh.REUSED.refreshed)
+        // The cache is also served when the throttle holds, so reuse on its own names no cause.
+        assertFalse("확인하지 못해" in ContextRefresh.REUSED.describe())
+        assertEquals(ContextRefresh.REUSED.detail, ContextRefresh.REUSED.describe(null))
+        assertTrue(LocationStatus.DISABLED.advice in ContextRefresh.REUSED.describe(LocationStatus.DISABLED.advice))
+        // A cause is only ever attached to a reuse.
+        assertEquals(ContextRefresh.REFRESHED.detail, ContextRefresh.REFRESHED.describe(LocationStatus.DISABLED.advice))
         assertTrue(ContextRefresh.values().distinctBy { it.detail }.size == 3)
     }
 
