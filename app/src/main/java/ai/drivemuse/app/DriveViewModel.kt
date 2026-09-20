@@ -36,7 +36,13 @@ data class UiState(
      * §7 QUE01, FIX-B: why the list no longer matches its conditions. A set rather than a flag,
      * because a recovery from an off-plan recording must not also clear an outstanding rule change.
      */
-    val stale: Set<StaleReason> = emptySet()
+    val stale: Set<StaleReason> = emptySet(),
+    /**
+     * UX04: every condition this batch could not meet, together. This used to be one snackbar
+     * chosen by an if/else chain, so a batch that was short *and* had an unapplied energy rule
+     * *and* had to break the artist cap reported exactly one of the three and hid the rest.
+     */
+    val notices: List<String> = emptyList()
 ) {
     /** Re-selection fixes conditions that moved; it does not fix a queue awaiting verification. */
     val needsReselect get() = stale.any { it.fixedByReselection }
@@ -72,6 +78,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private val weather=WeatherRepository()
     private var region: Region?=null
     private var weatherFact: WeatherFact?=null
+    /** §7: null until a fix has been attempted at all. */
+    private val locationStatusMutable=MutableStateFlow<LocationStatus?>(null)
+    val locationStatus=locationStatusMutable.asStateFlow()
     private var contextVersion=0L
     private var contextJob: Job?=null
     /**
@@ -173,11 +182,22 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     fun refreshWeather() {
         if(ui.value.driving) return
         contextJob?.cancel();contextJob=viewModelScope.launch { working("위치와 날씨를 확인하는 중…") {
-            region=location.refresh();weatherFact=region?.let { weather.get(it) };contextVersion++
+            val outcome=location.refresh()
+            region=outcome.region ?: location.lastKnown()
+            // A failed fix does not invalidate a forecast already held for the same region: the
+            // two have separate lifetimes (§4). Only a region we actually have can be looked up.
+            outcome.region?.let { weatherFact=weather.get(it) }
+            locationStatusMutable.value=outcome.status
+            contextVersion++
             cancelSelection();coordinator.invalidate()
-            val fact=weatherFact
-            mutable.update { it.copy(weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "Open-Meteo · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"} · ${java.time.Instant.ofEpochMilli(fact.observedAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime()}${if(fact.stale(System.currentTimeMillis())) " · 오래된 관측" else ""}") }
-            message(if(weatherFact==null) "날씨를 가져오지 못했어요. 기본 상황으로 추천합니다" else "날씨를 갱신했습니다")
+            val now=System.currentTimeMillis()
+            val fact=weatherFact?.takeIf { f -> region?.let { ContextFreshness.regionUsableForWeather(it.measuredAt,now) && f.usable(it.id,now) }==true }
+            mutable.update { it.copy(weatherLabel=if(fact==null) "날씨 정보 없음 · 기본 상황으로 추천" else "Open-Meteo · ${fact.temperature}°C · ${if(fact.precipitation>0) "강수" else "강수 없음"} · ${java.time.Instant.ofEpochMilli(fact.observedAt).atZone(java.time.ZoneId.systemDefault()).toLocalTime()}${if(fact.stale(now)) " · 오래된 관측" else ""}") }
+            message(when {
+                fact!=null && outcome.status==LocationStatus.AVAILABLE -> "날씨를 갱신했습니다"
+                fact!=null -> "위치를 새로 확인하지 못해 직전 지역의 날씨를 그대로 사용합니다"
+                else -> outcome.status.advice.ifBlank { "날씨를 가져오지 못했어요. 기본 상황으로 추천합니다" }
+            })
         } }
     }
     /** Registered zones, so the screen shows whether saving actually worked (§24). */
@@ -222,9 +242,10 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     }
     fun refreshZones() { zonesMutable.value = runCatching { location.registeredZones() }.getOrDefault(emptySet()) }
     fun registerZone(zone: Zone) { if(ui.value.driving) return;contextJob?.cancel();contextJob=viewModelScope.launch { working("현재 위치를 확인하는 중…") {
-        val ok = location.register(zone)
+        val status = location.register(zone)
         refreshZones()
-        message(if(ok) "${if (zone == Zone.HOME) "집" else "회사"}을(를) 등록했습니다" else "위치 권한과 정확도를 확인해 주세요. 실외에서 다시 시도하면 잘 잡혀요")
+        message(if(status==LocationStatus.AVAILABLE) "${if (zone == Zone.HOME) "집" else "회사"}을(를) 등록했습니다"
+                else "등록하지 못했어요 · ${status.advice}")
     } } }
     fun deleteZones() { if(ui.value.driving) return;contextJob?.cancel();location.deleteZones();region=null;weatherFact=null;weather.clear();contextVersion++;cancelSelection();viewModelScope.launch { coordinator.invalidate() };message("등록 영역을 삭제했습니다") }
     fun rate(track: Track, positive: Boolean) {
@@ -289,7 +310,7 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         try { return block() } finally { mutable.update { it.copy(working=null) } }
     }
     fun onboard(demo: Boolean) { viewModelScope.launch { prefs.flag("onboarded",true); mutable.update { it.copy(demo=demo,context=if(demo) DriveContext.COMMUTE_HOME else DriveContext.GENERAL_DRIVE) }; if (demo) recommend() } }
-    fun demo(value: Boolean) { cancelSelection();progress=DiscoveryProgress(); mutable.update { it.copy(demo=value,queue=emptyList(),connection=if(value) "데모 · 계정 미연결" else connectionLabel(settings.value)) } }
+    fun demo(value: Boolean) { cancelSelection();progress=DiscoveryProgress(); mutable.update { it.copy(demo=value,queue=emptyList(),notices=emptyList(),connection=if(value) "데모 · 계정 미연결" else connectionLabel(settings.value)) } }
     fun driving(value: Boolean) { if(value) { cancelSelection();contextJob?.cancel() }; mutable.update { it.copy(driving=value,page="홈") } }
     fun auto(value: Boolean) { if (ui.value.driving) return; viewModelScope.launch { prefs.flag("auto",value);message(if(value) "차량 연결 시 알림을 켰습니다" else "차량 연결 알림을 껐습니다") } }
     fun ratio(value: Float) { if(ui.value.driving) return;cancelSelection();markQueueStale(StaleReason.RULE_CHANGED);viewModelScope.launch { coordinator.invalidate();prefs.ratio(value);message("새 노래 비율을 ${(value*100).toInt()}%로 바꿨습니다") } }
@@ -411,9 +432,16 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 val outcomes=if(Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) intelligence.outcomes().filter { it.sessionId==sessionId }.sortedBy { it.createdAt }.map(learning::outcome) else emptyList()
                 val version=QueueVersion(sessionId,generation.toLong(),revision,contextVersion,outcomes.maxOfOrNull { it.version }?:0,UUID.randomUUID().toString())
                 coordinator.begin(version)
-                val now=System.currentTimeMillis();val validRegion=region?.takeIf { now-it.measuredAt in 0..120000 }
-                val validWeather=validRegion?.let { r -> weatherFact?.takeIf { it.usable(r.id,now) } }
-                val semantic=JSONObject().put("zone",validRegion?.zone?.name?:"UNKNOWN").put("timeOfDay",LocalDateTime.now().hour).put("origin","UNKNOWN").put("direction","UNKNOWN")
+                val now=System.currentTimeMillis();val lastFix=region
+                // The zone is where the car is *now*, so it expires in two minutes. The weather
+                // region is an ~11 km cell, so it does not — and a valid forecast for that cell no
+                // longer dies just because the fix behind it aged out.
+                val validRegion=lastFix?.takeIf { ContextFreshness.zoneUsable(it.measuredAt,now) }
+                val weatherRegion=lastFix?.takeIf { ContextFreshness.regionUsableForWeather(it.measuredAt,now) }
+                val validWeather=weatherRegion?.let { r -> weatherFact?.takeIf { it.usable(r.id,now) } }
+                // CTX04: the registered origin is real evidence and is sent. The destination is not
+                // inferred from it, so "direction" stays unknown until there is something to say.
+                val semantic=JSONObject().put("zone",validRegion?.zone?.name?:"UNKNOWN").put("timeOfDay",LocalDateTime.now().hour).put("origin",validRegion?.zone?.name?:"UNKNOWN").put("direction","UNKNOWN")
                 validWeather?.let { semantic.put("weather",JSONObject().put("temperature",it.temperature).put("precipitation",it.precipitation).put("stale",it.stale(now))) }
                 val novelty=if(snapshot.demo || !Policy.SPOTIFY_BEHAVIOR_LEARNING_ALLOWED) emptyMap() else runCatching { ai.drivemuse.app.catalog.NoveltyAnnotator(db.catalog()).annotate(prepared,emptySet(),runtime.historyCoverageSince()) }.getOrDefault(emptyMap())
                 val selection=engine.select(draft.aiConsent && !snapshot.demo,prepared,fallback,p,semantic,outcomes,constraints,effective.discovery,progress,version,0,(0 until Policy.BATCH_SIZE).toList(),novelty,MixTarget.resolve(p))
@@ -440,16 +468,21 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 progress=progress.append(queue)
                 offered.addAll(queue.map { it.id })
                 if(append) appendToPlayer(carried,queue)
-                val shortfall=direct?.takeIf { it.short }
-                // Direct-input mode does not read the genre-approximated energy, so a quiet/lively
-                // rule has nothing to act on. Dropping it silently would misreport the user's own
-                // rule as applied.
-                val energyRuleUnapplied=direct!=null && effective.energyCeiling<1.0
-                mutable.update { it.copy(queue=if(append) carried+queue else queue,stale=emptySet(),engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" }+(if("NOVEL_POOL_SHORTAGE" in selection.unmet) " · 새 후보가 부족해요" else "")) }
+                val notices = buildList {
+                    // Direct-input mode does not read the genre-approximated energy, so a
+                    // quiet/lively rule has nothing to act on. Dropping it silently would
+                    // misreport the user's own rule as applied.
+                    direct?.takeIf { it.short }?.let { add("조건을 통과한 후보가 ${it.eligible}곡이라 ${queue.size}곡만 준비했어요 · 제외 조건을 확인하거나 후보를 더 불러와 주세요") }
+                    if(direct!=null && effective.energyCeiling<1.0) add("직접 입력 모드에서는 ‘잔잔하게’ 같은 세기 규칙을 적용할 수 없어요 · 이 곡들에는 반영되지 않았습니다")
+                    if(direct?.capRelaxed==true) add("한 아티스트 ${Policy.MAX_PER_ARTIST}곡 제한을 지킬 만큼 후보가 다양하지 않아 제한을 완화했어요")
+                    if("NOVEL_POOL_SHORTAGE" in selection.unmet) add("아직 듣지 않은 후보가 부족해 익숙한 곡의 비중이 높아요")
+                    if("INSUFFICIENT_CANDIDATES" in selection.unmet) add("조건을 통과한 후보 자체가 적어요 · 설정에서 후보를 더 불러와 주세요")
+                    if("EXCLUSION_CONFLICT" in selection.unmet) add("설문의 제외 조건끼리 충돌해 일부 조건만 적용했어요 · 제외 장르를 확인해 주세요")
+                    if("REQUIRED_FEATURE_UNAVAILABLE" in selection.unmet) add("요청한 특성을 확인할 수 있는 후보가 없어 그 조건은 적용하지 못했어요")
+                }
+                mutable.update { it.copy(queue=if(append) carried+queue else queue,stale=emptySet(),engineLabel=if(direct!=null) "설문 조건 · 직접 입력 선곡" else selection.label,connection=if(snapshot.demo) "데모 · 계정 미연결" else connectionLabel(config),reason="${snapshot.context.label} · 새 노래 목표 ${(effective.discovery*100).toInt()}% · "+when(selection.adjustment) { "REDUCE_RECENT_SKIP"->"최근 넘긴 곡을 피해서 골랐어요";"FAVOR_SUPPORTED_FEATURE"->"반응이 좋았던 특성을 우선했어요";"EXPLORE_ALTERNATIVE"->"다른 방향의 곡을 섞었어요";else->"설정된 취향을 바탕으로 골랐어요" },notices=notices) }
                 dao.putHistory(HistoryEntity(UUID.randomUUID().toString(),snapshot.context.name,snapshot.context.mix,queue.size,System.currentTimeMillis(),demo=snapshot.demo))
-                // Say the pool is short rather than padding it out of the scored ranking.
-                if(shortfall!=null && !append) message("조건을 통과한 후보가 ${shortfall.eligible}곡이라 ${queue.size}곡만 준비했어요. 제외 조건을 확인하거나 후보를 더 불러와 주세요")
-                else if(energyRuleUnapplied && !append) message("직접 입력 모드에서는 ‘잔잔하게’ 같은 세기 규칙을 적용할 수 없어요. 이 곡들은 규칙을 반영하지 않았습니다")
+                // The notices stay on the card instead of racing each other through one snackbar.
                 return PrepareOutcome.Prepared
             } catch (e: CancellationException) { throw e }
               catch (e: Exception) {
@@ -670,7 +703,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             mutable.update { it.copy(context=manual,reason="직접 선택한 상황을 이번 이동 동안 유지합니다") }
             return
         }
-        val result = ContextEngine.classify(Signals(settings.value.connected,LocalDateTime.now()))
+        // CTX04: the registered HOME/WORK classification has existed all along and was never
+        // reaching the decision. It is passed as the origin only; the destination stays UNKNOWN,
+        // so an origin on its own stays below the confidence automation may act on.
+        val origin = region?.takeIf { ContextFreshness.zoneUsable(it.measuredAt,System.currentTimeMillis()) }?.zone ?: Zone.UNKNOWN
+        val result = ContextEngine.classify(Signals(settings.value.connected,LocalDateTime.now(),origin=origin))
         mutable.update { it.copy(context=if(result.confidence>=.8) result.context else DriveContext.GENERAL_DRIVE,reason=result.reasons.joinToString(" · ")+" · 확신도 ${(result.confidence*100).toInt()}%") }
     }
     fun disconnect() {

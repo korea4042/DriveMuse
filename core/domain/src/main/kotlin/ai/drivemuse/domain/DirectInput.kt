@@ -26,7 +26,12 @@ object DirectInputSelector {
         val eligible: Int,
         val requested: Int,
         /** How many of the chosen tracks came from a name the user typed. */
-        val seeded: Int = 0
+        val seeded: Int = 0,
+        /**
+         * The per-artist cap had to be broken to fill the batch (§30). Soft is not silent: the user
+         * gets told their batch leans on one artist because the pool left no alternative.
+         */
+        val capRelaxed: Boolean = false
     ) {
         val short get() = tracks.size < requested
     }
@@ -72,13 +77,14 @@ object DirectInputSelector {
             picked += track
         }
         // The cap is soft: a full batch beats a perfectly spread one (§30).
+        val cappedAt = picked.size
         if (picked.size < count) {
             for (track in eligible) {
                 if (picked.size == count) break
                 if (picked.none { it.id == track.id }) picked += track
             }
         }
-        return Outcome(picked, eligible.size, count, picked.count { SurveySeeds.matches(it, seeds) })
+        return Outcome(picked, eligible.size, count, picked.count { SurveySeeds.matches(it, seeds) }, capRelaxed = picked.size > cappedAt)
     }
 }
 

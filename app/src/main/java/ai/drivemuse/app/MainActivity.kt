@@ -135,6 +135,8 @@ class MainActivity: ComponentActivity() {
                         Text(ui.context.mix,fontSize=34.sp,fontWeight=FontWeight.Bold,letterSpacing=(-1).sp)
                         Text(when(ui.context) { DriveContext.COMMUTE_HOME -> "하루의 속도를, 조금 천천히."; DriveContext.COMMUTE_TO_WORK -> "기분 좋은 시작을 위한 리듬."; DriveContext.TRAVEL -> "익숙한 길 너머, 새로운 음악."; else -> "지금 이 순간에 어울리는 사운드." },color=DriveColors.Muted)
                         Text(ui.reason,fontSize=12.sp,color=DriveColors.Muted,lineHeight=19.sp)
+                        // UX04: every unmet condition at once, not whichever one won the snackbar.
+                        ui.notices.forEach { notice -> Text("· $notice",fontSize=12.sp,color=DriveColors.Cyan,lineHeight=19.sp) }
                         DriveButton(if(ui.busy) "음악을 고르고 있어요…" else if(ui.queue.isEmpty()) "오늘의 믹스 고르기" else if(ui.needsReselect) "조건이 바뀌었어요 · 다시 고르기" else "Spotify에서 재생",!ui.busy) {
                             if(ui.queue.isEmpty() || ui.needsReselect) vm.recommend() else if(ui.demo) vm.message("샘플 곡입니다. 설정에서 데모 모드를 끄고 Google 계정을 연결해 주세요") else vm.handoff(ui.queue.first())
                         }
