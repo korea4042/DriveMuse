@@ -79,6 +79,10 @@ import java.time.format.DateTimeFormatter
             val pool by vm.poolStatus.collectAsStateWithLifecycle()
             Text(pool, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             if (linked) DriveButton("후보 다시 불러오기", !driving) { vm.refreshPool() }
+            OperationStatus(rememberOperation(vm, OperationRegistry.POOL),
+                onCancel = { vm.cancelOperation(OperationRegistry.POOL) },
+                onDismiss = { vm.dismissOperation(OperationRegistry.POOL) },
+                onRetry = { vm.refreshPool() })
             if (linked) OutlinedButton(onClick = { cvm.spotifySignOut() }, enabled = !driving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Spotify 연결 해제") }
             else DriveButton("Spotify 계정 연결", !driving && integrations.getValue(ProviderId.SPOTIFY).ready) { onSpotifyConnect() }
         }
@@ -232,6 +236,10 @@ import java.time.format.DateTimeFormatter
             }
             Text("위치 권한을 허용하면 현재 지역의 실황을 가져옵니다. 권한이 없어도 추천은 동작해요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             DriveButton("현재 위치로 날씨 갱신", !driving, onClick = onRefresh)
+            OperationStatus(rememberOperation(vm, OperationRegistry.CONTEXT),
+                onCancel = { vm.cancelOperation(OperationRegistry.CONTEXT) },
+                onDismiss = { vm.dismissOperation(OperationRegistry.CONTEXT) },
+                onRetry = onRefresh)
         }
         IntegrationCard(cvm, ProviderId.WEATHER, integrations.getValue(ProviderId.WEATHER), busy == ProviderId.WEATHER, driving,
             "Open-Meteo를 사용합니다. 키가 필요 없고, 위치는 약 11km 단위로 반올림해서 보냅니다.")
@@ -248,7 +256,15 @@ import java.time.format.DateTimeFormatter
                 fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.Medium)
             Text("등록한 중심점과 반경만 기기에 암호화 저장합니다. 이동 경로는 저장하지 않아요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             DriveButton(if (Zone.HOME in zones) "집 위치 다시 등록" else "현재 위치를 집으로 등록", !driving, onClick = onRegisterHome)
+            OperationStatus(rememberOperation(vm, OperationRegistry.zone(Zone.HOME.name)),
+                onCancel = { vm.cancelOperation(OperationRegistry.zone(Zone.HOME.name)) },
+                onDismiss = { vm.dismissOperation(OperationRegistry.zone(Zone.HOME.name)) },
+                onRetry = onRegisterHome)
             DriveButton(if (Zone.WORK in zones) "회사 위치 다시 등록" else "현재 위치를 회사로 등록", !driving, onClick = onRegisterWork)
+            OperationStatus(rememberOperation(vm, OperationRegistry.zone(Zone.WORK.name)),
+                onCancel = { vm.cancelOperation(OperationRegistry.zone(Zone.WORK.name)) },
+                onDismiss = { vm.dismissOperation(OperationRegistry.zone(Zone.WORK.name)) },
+                onRetry = onRegisterWork)
             Text("실내에서는 위치가 잡히지 않을 수 있어요. 창가나 실외에서 시도해 주세요.", fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted)
             if (!driving) TextButton(onClick = onDelete, modifier = Modifier.heightIn(min = 48.dp)) { Text("등록 장소 삭제") }
         }
@@ -311,3 +327,45 @@ import java.time.format.DateTimeFormatter
 }
 private fun time(ms: Long) = DateTimeFormatter.ofPattern("MM.dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(ms))
 @Composable fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateWithLifecycleCompat(): State<T> = collectAsStateWithLifecycle()
+
+/**
+ * §3: the state of one control's work, shown next to that control.
+ *
+ * Ticks only while something is running, so the one-second stage line and the eight-second "taking
+ * longer than usual" arrive on time without the screen recomposing forever afterwards. There is
+ * deliberately no progress bar with a percentage on it — the design forbids inventing one.
+ */
+@Composable fun OperationStatus(
+    op: Operation?,
+    onCancel: () -> Unit = {},
+    onDismiss: () -> Unit = {},
+    onRetry: (() -> Unit)? = null
+) {
+    if (op == null || op.phase == OperationPhase.IDLE) return
+    var now by remember(op.id) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(op.id, op.running) {
+        while (op.running) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(400) }
+        now = System.currentTimeMillis()
+    }
+    val text = op.label(now)
+    val tone = when (op.phase) {
+        OperationPhase.FAILED -> MaterialTheme.colorScheme.error
+        OperationPhase.SUCCEEDED -> DriveColors.Cyan
+        OperationPhase.UNKNOWN, OperationPhase.CANCELLED -> DriveColors.Muted
+        else -> DriveColors.Muted
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = text }) {
+        if (op.running) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DriveColors.Cyan)
+        Text(text, fontSize = 14.sp, lineHeight = 20.sp, color = tone, modifier = Modifier.weight(1f))
+        if (op.cancellable(now)) TextButton(onClick = onCancel) { Text("취소") }
+        if (op.settled && op.safeToRetry && onRetry != null) TextButton(onClick = onRetry) { Text("다시 시도") }
+        if (op.settled) TextButton(onClick = onDismiss) { Text("닫기") }
+    }
+}
+
+/** The operation currently attached to [target], or null. */
+@Composable fun rememberOperation(vm: DriveViewModel, target: String): Operation? {
+    val all by vm.operationStates.collectAsStateWithLifecycle()
+    return all[target]
+}
