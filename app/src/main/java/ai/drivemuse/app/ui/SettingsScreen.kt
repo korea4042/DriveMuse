@@ -51,6 +51,7 @@ import java.time.format.DateTimeFormatter
             SummaryRow(Icons.Outlined.WbSunny, "위치와 날씨", weatherLabel, if (!vm.weatherConfigured) "날씨 설정 필요" else null) { onOpen("설정/위치") }
             SummaryRow(Icons.Outlined.Home, "집과 회사", "장소를 등록하면 출퇴근 상황을 더 잘 이해해요", null) { onOpen("설정/장소") }
             SummaryRow(Icons.Outlined.Schedule, "출퇴근과 이동 판단", commuteSummary(vm), if (commuteSummary(vm) == "일정 미설정") "설정 필요" else null) { onOpen("설정/출퇴근") }
+            SummaryRow(Icons.Outlined.Science, "실험실", "핸들 단축 조작 · " + steeringSummary(vm), null) { onOpen("설정/실험실") }
             SummaryRow(Icons.Outlined.LibraryMusic, "음악 정보 수집", collection.lastSuccessAt?.let { "마지막 갱신 ${time(it)} · ${collection.phase}" } ?: collection.phase, null) { onOpen("설정/수집") }
         }
         GlassSurface {
@@ -279,6 +280,12 @@ import java.time.format.DateTimeFormatter
     val on = schedules.filter { it.enabled && it.weekdays.isNotEmpty() }
     if (on.isEmpty()) return "일정 미설정"
     return on.sortedBy { it.direction.ordinal }.joinToString(" · ") { "${it.direction.label} ${it.windowLabel}" }
+}
+
+@Composable private fun steeringSummary(vm: DriveViewModel): String {
+    val records by vm.capabilities.collectAsStateWithLifecycle()
+    val usable = records.count { it.capability.usable }
+    return if (usable == 0) "확인 전" else "${usable}개 조작 확인됨"
 }
 
 @Composable fun SettingsTitle(title: String, sub: String) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(title, fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold); Text(sub, fontSize = 14.sp, lineHeight = 20.sp, color = DriveColors.Muted) } }

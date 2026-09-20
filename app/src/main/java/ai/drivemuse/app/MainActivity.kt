@@ -1,6 +1,7 @@
 package ai.drivemuse.app
 
 import ai.drivemuse.app.onboarding.OnboardingScreen
+import ai.drivemuse.app.steering.SteeringKeyTap
 import ai.drivemuse.app.ui.*
 import android.Manifest
 import android.bluetooth.BluetoothManager
@@ -57,6 +58,15 @@ class MainActivity: ComponentActivity() {
         setContent { DriveMuseTheme { DriveApp(redirect = redirect) } }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); redirect.value = intent.data }
+    // §10 step 1. Observed and passed straight on: consuming here would break the ordinary button
+    // behaviour the diagnostic exists to protect, and would make the app look like the base-action
+    // owner when it is only listening from the foreground.
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        SteeringKeyTap.observe(event); return super.onKeyDown(keyCode, event)
+    }
+    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        SteeringKeyTap.observe(event); return super.onKeyUp(keyCode, event)
+    }
 }
 @Composable fun DriveApp(vm: DriveViewModel = viewModel(), cvm: CatalogViewModel = viewModel(), redirect: MutableStateFlow<android.net.Uri?>? = null) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -188,6 +198,8 @@ class MainActivity: ComponentActivity() {
                 "설정/위치" -> item { WeatherDetail(vm,cvm,ui.weatherLabel,ui.weatherDetail,ui.driving) { locationPermission.launch(Manifest.permission.ACCESS_COARSE_LOCATION) } }
                 "설정/장소" -> item { PlacesDetail(vm,{deleteWhat="home"},{deleteWhat="work"},{deleteWhat="zones"},ui.driving) }
                 "설정/출퇴근" -> item { CommuteDetail(vm,ui.driving) }
+                "설정/실험실" -> item { SteeringLab(vm,settings,ui.driving) { vm.page(it) } }
+                "설정/핸들진단" -> item { SteeringDiagnostic(vm,settings,ui.driving) }
                 "설정/수집" -> item { CollectionDetail(vm,cvm,ui.driving) }
                 "설정/차량" -> {
                     item { SettingsTitle("차량 연결","연결되면 조용한 알림으로 시작합니다") }
@@ -246,6 +258,8 @@ class MainActivity: ComponentActivity() {
         }) {Text("페어링된 차량 찾기")}
         devices.forEach { (id,name) -> TextButton(onClick={vm.registerVehicle(id,name);devices=emptyList()}) {Text(name)} }
         Text("차량의 Bluetooth 기기를 선택하세요. 주소는 기기별 키로 변환해 저장합니다.",fontSize=12.sp,color=DriveColors.Muted,lineHeight=20.sp)
-        TextButton(onClick={vm.classifyNow();vm.page("홈")}) {Text("현재 시간·차량으로 이동 판정")}
+        // The judgement stopped being "현재 시간·차량" in 0.14.0: it reads the departure snapshot
+        // and the schedules the user set, with only the day/night band coming from the clock.
+        TextButton(onClick={vm.classifyNow();vm.page("홈")}) {Text("지금 상황 다시 판단")}
     }
 }

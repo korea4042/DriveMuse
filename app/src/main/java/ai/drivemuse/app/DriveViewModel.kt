@@ -146,6 +146,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     /** Declared after `settings`: a property initialiser cannot read one defined below it. */
     val schedules = settings.map { CommuteCodec.decode(it.commuteJson) }
         .stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
+    val capabilities = settings.map { CapabilityCodec.decode(it.steeringJson) }
+        .stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
     val rules = dao.rules().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
     val history = dao.history().stateIn(viewModelScope,SharingStarted.Eagerly,emptyList())
     private val mutable = MutableStateFlow(UiState())
@@ -898,6 +900,31 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    /**
+     * The result of one stationary diagnostic, saved deliberately rather than inferred from the
+     * run. A foreground test can never justify SUPPORTED, so the caller passes what it observed
+     * and the record carries the conditions it was observed under.
+     */
+    fun saveCapability(record: CapabilityRecord) {
+        if (ui.value.driving) { message("정차 후 저장해 주세요"); return }
+        operations.start(OperationKind.SAVE,OperationRegistry.capability(record.shortcut.name),
+            retry = { saveCapability(record) }) { op ->
+            val intended = capabilities.value.filterNot {
+                it.vehicleId == record.vehicleId && it.transport == record.transport && it.shortcut == record.shortcut
+            } + record
+            prefs.string("steeringCapabilities",CapabilityCodec.encode(intended))
+            val readBack = CapabilityCodec.decode(prefs.flow.first().steeringJson)
+            if (readBack.none { it == record }) error("결과를 저장하지 못했어요 · 다시 시도해 주세요")
+            op.confirm("${record.shortcut.label} · ${record.capability.label}")
+        }
+    }
+
+    /** The lab master switch. Turning it off abandons nothing, because nothing is wired yet. */
+    fun steeringEnabled(value: Boolean) {
+        if (ui.value.driving) { message("정차 후 설정해 주세요"); return }
+        viewModelScope.launch { prefs.flag("steeringEnabled",value) }
     }
 
     /** §3: saved schedules take effect on the next assessment and never interrupt the current song. */
