@@ -66,7 +66,11 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private suspend fun touchSession() {
         val previous=sessionId
         runCatching { sessionId=prefs.session(System.currentTimeMillis()) { UUID.randomUUID().toString() } }
-        if(sessionId!=previous) offered.clear()
+        if(sessionId!=previous) {
+            offered.clear()
+            // R09: a new drive session is the other defined way control comes back.
+            regainControl()
+        }
     }
     private var firstMoodSession: String?=null
     private var progress=DiscoveryProgress()
@@ -207,18 +211,28 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     /**
      * The one skip whose cause the app can prove (§7). The command is logged before it is sent, so
      * the track change that follows is attributed to it rather than guessed at.
+     *
+     * It plays the app's own next slot rather than calling skipNext. Spotify's next is whatever is
+     * next in Spotify's queue, which is only the same thing when nothing has interfered — and if
+     * something has interfered, that is exactly when the two differ.
      */
     fun skipCurrent() {
         if(ui.value.demo) { message("데모 곡은 재생할 수 없습니다"); return }
-        viewModelScope.launch {
-            observer.commandedSkip()
-            when(val sent=runtime.spotifyRemote.next()) {
-                is ai.drivemuse.app.spotify.DispatchResult.Accepted -> Unit
-                is ai.drivemuse.app.spotify.DispatchResult.Rejected -> message(sent.reason)
-                // Not resent: the skip may have landed, and a second one would drop two tracks.
-                is ai.drivemuse.app.spotify.DispatchResult.Unknown -> message("다음 곡 명령의 결과를 확인하지 못했어요")
-            }
-            kotlinx.coroutines.delay(2000);refreshListening()
+        if(playbackJob?.isActive == true) { message("재생 요청을 처리하는 중이에요"); return }
+        val queue = ui.value.queue
+        val current = runtime.spotifyRemote.state.value?.trackId
+        val index = queue.indexOfFirst { it.id == current }
+        when {
+            ui.value.queueStale ->
+                message("목록이 현재 조건과 달라요. 다시 선곡한 뒤 이어서 들어 주세요")
+            settings.value.controlLost ->
+                message("자동 선곡이 멈춘 상태예요. 목록에서 곡을 선택하면 다시 시작합니다")
+            // Not our playback: advancing would hand the driver whatever Spotify queued.
+            index < 0 ->
+                message("재생 중인 곡이 목록에 없어요. 목록에서 곡을 선택해 주세요")
+            index == queue.lastIndex ->
+                message("목록의 마지막 곡이에요. 다음 묶음을 준비한 뒤 이어집니다")
+            else -> launchPlayback(queue[index + 1], markSkip = true)
         }
     }
     fun resetLearning() { if(ui.value.driving) return;cancelSelection();surveyJob?.cancel();engine.clearCache();viewModelScope.launch { db.withTransaction { intelligence.clearOutcomes();intelligence.clearBatches();intelligence.clearEvents();intelligence.clearAttempts();intelligence.clearAnalysis() };progress=DiscoveryProgress();refreshListening();message("학습 기록을 초기화했습니다. 설문은 유지합니다") } }
@@ -271,6 +285,8 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private suspend fun prepareNextBatch(baseRevision: Long) {
         if(survey.value?.completed!=true || ui.value.demo || !spotifyLinked) return
         if(settings.value.suspendedUntil>System.currentTimeMillis()) return
+        // R09: automation does not resume on its own after losing the queue.
+        if(settings.value.controlLost) return
         runSelection(selectionGeneration, append = true, baseRevision = baseRevision)
     }
 
@@ -414,13 +430,22 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
      */
     private suspend fun onUnplannedPlayback(trackId: String) {
         if (ui.value.demo) return
-        if (settings.value.suspendedUntil > System.currentTimeMillis()) return
+        if (settings.value.controlLost) return
         cancelSelection()
         scheduler.reset()
         coordinator.invalidate()
-        prefs.suspendUntil(System.currentTimeMillis()+30*60*1000)
+        // No expiry. Waiting out a clock is not consent, so the flag is cleared by an explicit
+        // request to play or by a new drive session, never by time passing.
+        prefs.flag("controlLost", true)
         mutable.update { it.copy(queueStale=true) }
-        message("목록에 없는 곡이 재생돼 자동 선곡을 30분 동안 멈췄어요. 계속하려면 곡을 다시 선택해 주세요")
+        message("목록에 없는 곡이 재생돼 자동 선곡을 멈췄어요. 목록에서 곡을 선택하면 다시 시작합니다")
+    }
+
+    /** The driver asked for playback or a new session began: automation may own the queue again. */
+    private suspend fun regainControl() {
+        // Read the store rather than the StateFlow: this runs during init, before the flow has
+        // necessarily emitted, and a stale `false` there would silently keep the stop in place.
+        if (runCatching { prefs.flow.first().controlLost }.getOrDefault(false)) prefs.flag("controlLost", false)
     }
 
     /** One in-flight playback request at a time: a double tap must not queue the batch twice (QUE02). */
@@ -435,12 +460,25 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if (!ai.drivemuse.app.spotify.SpotifyIds.isTrackId(track.id)) { message("예전 목록의 곡이에요. 설정에서 후보를 새로 불러와 주세요"); return }
         if (!Constraints(excludedGenres = profile().exclusions).allows(track)) { message("현재 제외 조건에 맞지 않는 곡입니다"); return }
         if (playbackJob?.isActive == true) { message("재생 요청을 처리하는 중이에요"); return }
+        launchPlayback(track, markSkip = false)
+    }
+
+    /**
+     * The single place a recording is started. Both the list tap and the next button come through
+     * here, so the double-tap guard, the plan registration and the start confirmation are shared
+     * rather than reimplemented per entry point (QUE02).
+     */
+    private fun launchPlayback(track: Track, markSkip: Boolean) {
         val batch = ui.value.queue
         val following = batch.dropWhile { it.id != track.id }.drop(1).filter { it.id != track.id }.distinctBy { it.id }
         playbackJob = viewModelScope.launch {
           // A hard ceiling on the whole request: nothing here may leave the button locked.
           val finished = kotlinx.coroutines.withTimeoutOrNull(60_000) {
             message("Spotify에 연결하는 중…")
+            // Before plan(), so the close of the attempt now ending carries the command that caused it.
+            if (markSkip) observer.commandedSkip()
+            // Asking to play is the driver taking the wheel back (R09).
+            regainControl()
             // Registered before the command so the very first callback for this track is observed.
             // Only what the app queued counts; Spotify's own autoplay never scores (§4).
             observer.plan(null, listOf(track) + following); scheduler.reset()

@@ -25,6 +25,12 @@ data class Settings(
     val vehicleName: String = "",
     val connected: Boolean = false,
     val suspendedUntil: Long = 0,
+    /**
+     * R09. Set when a recording the app did not plan is observed. Unlike `suspendedUntil` this has
+     * no expiry: the app does not win control back by waiting. It is cleared when the driver asks
+     * for playback again or a new drive session begins.
+     */
+    val controlLost: Boolean = false,
     val accountLinked: Boolean = false,
     val tasteSyncedAt: Long = 0,
     val searchCalls: Int = 0,
@@ -45,6 +51,7 @@ class Preferences(private val context: Context) {
             p[stringPreferencesKey("vehicleName")] ?: "",
             p[booleanPreferencesKey("connected")] ?: false,
             p[longPreferencesKey("suspended")] ?: 0,
+            p[booleanPreferencesKey("controlLost")] ?: false,
             p[booleanPreferencesKey("accountLinked")] ?: false,
             p[longPreferencesKey("tasteSyncedAt")] ?: 0,
             p[intPreferencesKey("searchCalls")] ?: 0,

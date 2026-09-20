@@ -49,6 +49,12 @@ class PlaybackObserver(
     private val observations = mutableListOf<Observation>()
     /** Set when the player reports a recording the app did not queue (§30 suspend condition). */
     var unplannedTrackId: String? = null; private set
+    /**
+     * R09. One episode, not one track id. Without this a driver who picks three songs of their own
+     * raises three events, and a return to the same off-plan track later in the session raises
+     * none. The episode ends when a planned recording is observed again.
+     */
+    private var unplannedEpisode = false
 
     /** What the state handler wants said once the lock is released. */
     private sealed interface Signal {
@@ -72,6 +78,8 @@ class PlaybackObserver(
 
     /** Records the batch the app just sent to the player. Ordinals follow the queue order. */
     suspend fun plan(batchId: String?, tracks: List<Track>): Unit = mutex.withLock {
+        unplannedEpisode = false
+        unplannedTrackId = null
         planned.clear()
         tracks.forEachIndexed { index, track -> planned[track.id] = index }
         batch = batchId
@@ -98,11 +106,13 @@ class PlaybackObserver(
             // R09: report it once. Repeating the signal for every callback of the same recording
             // would turn one intervention into a stream of them.
             if (ordinal == null) {
-                val first = unplannedTrackId != id
+                val first = !unplannedEpisode
+                unplannedEpisode = true
                 unplannedTrackId = id
                 return@withLock if (first) Signal.Unplanned(id) else null
             }
             unplannedTrackId = null
+            unplannedEpisode = false
             attempt = PlaybackAttemptEntity(UUID.randomUUID().toString(), id, session(), batch, ordinal, null, state.observedAt, null, null, "COMMANDED")
             durationMs = null; lastPositionMs = 0; lastStoredAt = 0; commandAt = null; observations.clear()
         }
