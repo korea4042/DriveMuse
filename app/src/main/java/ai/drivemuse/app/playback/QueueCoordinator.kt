@@ -33,7 +33,10 @@ class QueueCoordinator(private val db: DriveDatabase) {
         db.withTransaction {
             db.intelligence().invalidate()
             val json=JSONArray(tracks.map { t -> JSONObject().put("id",t.id).put("title",t.title).put("artist",t.artist).put("familiar",t.familiar).put("durationMs",t.durationMs).put("features",JSONArray(t.features.map { f -> JSONObject().put("axis",f.axis).put("value",f.value).put("source",f.source).put("confidence",f.confidence) })) }).toString()
-            db.intelligence().putBatch(BatchEntity(UUID.randomUUID().toString(),v.sessionId,v.generation,v.profileVersion,v.contextVersion,v.evidenceVersion,v.candidateSetId,"READY",json,System.currentTimeMillis()))
+            // R02: the number is read and used inside one transaction, so two preparations racing
+            // cannot be handed the same seq.
+            val seq=db.intelligence().nextBatchSeq(v.sessionId,v.generation)
+            db.intelligence().putBatch(BatchEntity(UUID.randomUUID().toString(),v.sessionId,v.generation,v.profileVersion,v.contextVersion,v.evidenceVersion,v.candidateSetId,"READY",json,System.currentTimeMillis(),seq))
         }
         active=null;true
     }

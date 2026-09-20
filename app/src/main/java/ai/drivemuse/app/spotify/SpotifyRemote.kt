@@ -25,6 +25,28 @@ data class RemotePlayerState(
 }
 
 /**
+ * R01. What the SDK said about one command, never what the player is doing.
+ *
+ * `Accepted` is not `Confirmed`: the command reached Spotify, nothing more. `Unknown` covers the
+ * timeout and any indeterminate transport failure — resending on Unknown is how a queue grows
+ * duplicates, so the caller reconciles against observed state instead.
+ */
+sealed interface DispatchResult {
+    data object Accepted : DispatchResult
+    data class Rejected(val reason: String) : DispatchResult
+    data object Unknown : DispatchResult
+}
+
+/** The outcome of asking for one recording to start, after observation has had its say. */
+sealed interface StartResult {
+    data object Confirmed : StartResult
+    /** Definitively did not start; another transport may be tried. */
+    data class Failed(val reason: String) : StartResult
+    /** May or may not have started. Never re-send the same play on this. */
+    data class Indeterminate(val reason: String) : StartResult
+}
+
+/**
  * Technical design v2.3 §3 and §30, Spotify App Remote.
  *
  * The Web API can only command a device that is already awake, which is useless in a car: the point
@@ -96,34 +118,65 @@ class SpotifyRemote(private val clientId: () -> String?) {
 
     fun disconnect() { remote?.let { SpotifyAppRemote.disconnect(it) }; remote = null; stateMutable.value = null }
 
-    /** Waits for the SDK's own result instead of trusting that the call returned (PLAY01). */
-    private suspend fun await(call: CallResult<Empty>, timeoutMs: Long = 8_000): String? = withTimeoutOrNull(timeoutMs) {
-        suspendCancellableCoroutine<String?> { cont ->
-            call.setResultCallback { if (cont.isActive) cont.resume(null) }
-            call.setErrorCallback { e -> if (cont.isActive) cont.resume(explain(e)) }
-        }
-    } ?: "Spotify가 ${timeoutMs / 1000}초 안에 응답하지 않았어요"
+    /**
+     * R01. The previous version resumed with `null` on success and then applied `?:` to the
+     * `withTimeoutOrNull` result, so a success and a timeout were the same value and every
+     * accepted command was reported as a timeout. Three outcomes are not two: a command can be
+     * accepted, definitively refused, or of unknown fate, and only the middle one justifies
+     * sending the same command down another pipe.
+     */
+    private suspend fun dispatch(call: CallResult<Empty>, timeoutMs: Long = 8_000): DispatchResult =
+        withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<DispatchResult> { cont ->
+                call.setResultCallback { if (cont.isActive) cont.resume(DispatchResult.Accepted) }
+                call.setErrorCallback { e -> if (cont.isActive) cont.resume(DispatchResult.Rejected(explain(e))) }
+            }
+        } ?: DispatchResult.Unknown
 
     /**
      * Starts one recording and returns null only once the player reports that track as the current
      * one. The command being accepted is not enough: another track may still be current, or the
      * player may have refused silently.
      */
-    suspend fun playAndConfirm(trackId: String, confirmMs: Long = 10_000): String? {
-        val api = remote?.takeIf { it.isConnected }?.playerApi ?: return "Spotify에 연결되지 않았어요"
-        await(api.play("spotify:track:$trackId"))?.let { return it }
+    suspend fun playAndConfirm(trackId: String, confirmMs: Long = 10_000): StartResult {
+        val api = remote?.takeIf { it.isConnected }?.playerApi
+            ?: return StartResult.Failed("Spotify에 연결되지 않았어요")
+        // A rejection is the only outcome that proves the command did not land. On Unknown the
+        // player may well be starting the track right now, so the state stream decides.
+        when (val sent = dispatch(api.play("spotify:track:$trackId"))) {
+            is DispatchResult.Rejected -> return StartResult.Failed(sent.reason)
+            else -> Unit
+        }
         val started = withTimeoutOrNull(confirmMs) {
             state.filterNotNull().first { it.trackId == trackId && !it.paused }
         }
-        return if (started != null) null else "재생 시작을 확인하지 못했어요 (다른 곡이 재생 중이거나 응답 없음)"
+        return when {
+            started != null -> StartResult.Confirmed
+            // Accepted but never observed: another track holds the player, or state is stale.
+            else -> StartResult.Indeterminate("재생 시작을 확인하지 못했어요 (다른 곡이 재생 중이거나 상태 응답 없음)")
+        }
     }
 
-    suspend fun queueAwait(trackId: String): String? {
-        val api = remote?.takeIf { it.isConnected }?.playerApi ?: return "Spotify에 연결되지 않았어요"
-        return await(api.queue("spotify:track:$trackId"))
+    suspend fun queue(trackId: String): DispatchResult {
+        val api = remote?.takeIf { it.isConnected }?.playerApi
+            ?: return DispatchResult.Rejected("Spotify에 연결되지 않았어요")
+        return dispatch(api.queue("spotify:track:$trackId"))
     }
 
-    fun next(): Boolean { remote?.takeIf { it.isConnected }?.playerApi?.skipNext() ?: return false; return true }
-    fun resume(): Boolean { remote?.takeIf { it.isConnected }?.playerApi?.resume() ?: return false; return true }
-    fun pause(): Boolean { remote?.takeIf { it.isConnected }?.playerApi?.pause() ?: return false; return true }
+    /** §7: these three used to drop their CallResult, so a command that never landed read as sent. */
+    suspend fun next(): DispatchResult {
+        val api = remote?.takeIf { it.isConnected }?.playerApi
+            ?: return DispatchResult.Rejected("Spotify에 연결되지 않았어요")
+        return dispatch(api.skipNext())
+    }
+    suspend fun resume(): DispatchResult {
+        val api = remote?.takeIf { it.isConnected }?.playerApi
+            ?: return DispatchResult.Rejected("Spotify에 연결되지 않았어요")
+        return dispatch(api.resume())
+    }
+    suspend fun pause(): DispatchResult {
+        val api = remote?.takeIf { it.isConnected }?.playerApi
+            ?: return DispatchResult.Rejected("Spotify에 연결되지 않았어요")
+        return dispatch(api.pause())
+    }
 }

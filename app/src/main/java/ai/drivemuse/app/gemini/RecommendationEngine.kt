@@ -11,6 +11,19 @@ import org.json.JSONArray
 
 data class Selection(val tracks: List<Track>, val label: String, val adjustment: String = "NONE", val unmet: List<String> = emptyList())
 class RecommendationEngine(private val gateway: RoleGateway) {
+    companion object {
+        /**
+         * Spotify Developer Policy III.13 and III.14: Spotify Content may not be fed to an AI/ML
+         * system, and Spotify data may not be analysed into listening metrics or user profiles.
+         * Every candidate here originates from Spotify, so the selector and review roles are held
+         * shut at the call site rather than left to a consent flag.
+         *
+         * Survey analysis is untouched: those inputs are the user's own answers.
+         *
+         * Flip this only once an independent, permitted candidate source exists.
+         */
+        const val SPOTIFY_AI_SELECTION_ALLOWED = false
+    }
     private val strings=Schema.array(Schema.string())
     private var contextCache: Pair<String,JSONObject>?=null
     fun clearCache() { contextCache=null }
@@ -24,6 +37,7 @@ class RecommendationEngine(private val gateway: RoleGateway) {
         }
     }
     suspend fun select(enabled: Boolean, candidates: List<Track>, fallback: List<Track>, profile: SurveyProfile, semantic: JSONObject, review: List<Outcome>, constraints: Constraints, discovery: Double, progress: DiscoveryProgress, version: QueueVersion? = null, queueRevision: Long = 0, replaceableOrdinals: List<Int> = (0 until Policy.BATCH_SIZE).toList(), novelty: Map<String,CandidateNovelty> = emptyMap(), mix: MixTarget = MixTarget.DEFAULT): Selection {
+        if(!SPOTIFY_AI_SELECTION_ALLOWED) return Selection(fallback,"설문 기반 선곡 · AI 선곡 보류 · Spotify 재생")
         if(!enabled || !gateway.configured) return Selection(fallback,"초기 취향 · 로컬 추천 · Spotify 재생")
         val result=withTimeoutOrNull(20000) {
             try {
@@ -51,14 +65,16 @@ class RecommendationEngine(private val gateway: RoleGateway) {
                 val allowedEvidence=setOf("SURVEY","PROVIDER","DIVERSITY","EXPLICIT_RATING","CONTEXT")+latest.map { it.attemptId }+candidates.flatMap { novelty[it.id]?.novelty?.evidenceIds?:emptyList() }
                 val selected=gateway.call(Role.SELECTOR,input,Schema.obj(mapOf("trackIds" to strings,"reasonEvidenceIds" to strings,"adjustment" to Schema.string(),"confidence" to Schema.string(),"unmetConditions" to strings,"profileVersion" to Schema.integer(),"contextVersion" to Schema.integer(),"evidenceVersion" to Schema.integer(),"candidateSetId" to Schema.string(),"queueRevision" to Schema.integer()))) { j ->
                     JsonGate.keys(j,"trackIds","reasonEvidenceIds","adjustment","confidence","unmetConditions","profileVersion","contextVersion","evidenceVersion","candidateSetId","queueRevision")
-                    val ids=JsonGate.strings(j.getJSONArray("trackIds"),3)
+                    val ids=JsonGate.strings(j.getJSONArray("trackIds"),Policy.BATCH_SIZE)
                     require(ids.size<=replaceableOrdinals.size && ids.distinct().size==ids.size && ids.all { id -> candidates.any { it.id==id && constraints.allows(it) } })
                     require(JsonGate.strings(j.getJSONArray("reasonEvidenceIds"),6).all { it in allowedEvidence })
                     require(JsonGate.string(j,"adjustment") in setOf("NONE","REDUCE_RECENT_SKIP","FAVOR_SUPPORTED_FEATURE","EXPLORE_ALTERNATIVE") && JsonGate.string(j,"confidence") in setOf("LOW","MEDIUM","HIGH"))
                     require(JsonGate.strings(j.getJSONArray("unmetConditions"),5).all { it in setOf("INSUFFICIENT_CANDIDATES","NOVEL_POOL_SHORTAGE","REQUIRED_FEATURE_UNAVAILABLE","EXCLUSION_CONFLICT") })
                     require(JsonGate.integer(j,"profileVersion")==(version?.profileVersion?:0) && JsonGate.integer(j,"contextVersion")==(version?.contextVersion?:0) && JsonGate.integer(j,"evidenceVersion")==(version?.evidenceVersion?:0) && JsonGate.string(j,"candidateSetId")==(version?.candidateSetId?:"") && JsonGate.integer(j,"queueRevision")==queueRevision)
                 }
-                val ids=JsonGate.strings(selected.getJSONArray("trackIds"),3)
+                // R03: the contract is Policy.BATCH_SIZE. The literal 3 survived the 3->8 change and
+                // turned every valid 4..8 answer into a silent fallback.
+                val ids=JsonGate.strings(selected.getJSONArray("trackIds"),Policy.BATCH_SIZE)
                 val unmet=JsonGate.strings(selected.getJSONArray("unmetConditions"),5)
                 // §11: 0–2 tracks with reasons is a valid answer; the local fallback fills nothing silently.
                 if(ids.isEmpty()) Selection(fallback,"AI 후보 부족 · 로컬 추천 · Spotify 재생",JsonGate.string(selected,"adjustment"),unmet)

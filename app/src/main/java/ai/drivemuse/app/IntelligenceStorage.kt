@@ -4,8 +4,15 @@ import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName="intelligence_state") data class IntelligenceState(@PrimaryKey val key: String, val json: String, val version: Long, val updatedAt: Long)
-@Entity(tableName="batches", indices=[Index(value=["sessionId","generation"],unique=true)])
-data class BatchEntity(@PrimaryKey val id: String, val sessionId: String, val generation: Long, val profileVersion: Long, val contextVersion: Long, val evidenceVersion: Long, val candidateSetId: String, val status: String, val json: String, val createdAt: Long)
+/**
+ * R02. The unique key used to be (sessionId, generation). `invalidate()` only flips `status`, so
+ * the old row stays in the index and the second batch of a session could never be inserted — the
+ * constraint failure was swallowed by the append path and the queue simply stopped being filled.
+ * `batchSeq` is the batch number inside one generation; `generation` still means "the conditions
+ * changed" and is not bumped per batch.
+ */
+@Entity(tableName="batches", indices=[Index(value=["sessionId","generation","batchSeq"],unique=true)])
+data class BatchEntity(@PrimaryKey val id: String, val sessionId: String, val generation: Long, val profileVersion: Long, val contextVersion: Long, val evidenceVersion: Long, val candidateSetId: String, val status: String, val json: String, val createdAt: Long, val batchSeq: Long = 0)
 /**
  * v2.3 §7 and §13. The observation columns are additive: rows written before Phase 1 are explicit
  * ratings, which read their score from `explicit` and never touch the listening fields.
@@ -29,6 +36,9 @@ data class PlaybackEventEntity(@PrimaryKey val eventId: String, val attemptId: S
     @Query("SELECT * FROM intelligence_state WHERE `key`=:key") abstract fun observeState(key: String): Flow<IntelligenceState?>
     @Insert(onConflict=OnConflictStrategy.REPLACE) abstract suspend fun putState(row: IntelligenceState)
     @Insert abstract suspend fun putBatch(row: BatchEntity)
+    /** Next number in this generation. Called inside the same transaction as the insert (R02). */
+    @Query("SELECT COALESCE(MAX(batchSeq), -1) + 1 FROM batches WHERE sessionId=:sessionId AND generation=:generation")
+    abstract suspend fun nextBatchSeq(sessionId: String, generation: Long): Long
     @Query("SELECT * FROM batches WHERE status='READY' ORDER BY createdAt DESC LIMIT 1") abstract suspend fun ready(): BatchEntity?
     @Query("UPDATE batches SET status='INVALIDATED' WHERE status IN ('READY','PREPARING','PROVISIONAL')") abstract suspend fun invalidate()
     @Query("SELECT * FROM outcomes") abstract suspend fun outcomes(): List<OutcomeEntity>

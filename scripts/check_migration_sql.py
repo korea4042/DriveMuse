@@ -17,12 +17,18 @@ assert db.execute('SELECT text FROM rules').fetchone()==('keep',)
 assert db.execute('SELECT title FROM history').fetchone()==('keep',)
 assert db.execute('SELECT count(*) FROM outcomes').fetchone()==(0,)
 assert 'audioLanguage' in [r[1] for r in db.execute('PRAGMA table_info(candidates)')]
-row=('id','session',1,1,1,1,'candidate','READY','[]',0)
-db.execute('INSERT INTO batches VALUES (?,?,?,?,?,?,?,?,?,?)',row)
+# R02: the key is (sessionId, generation, batchSeq). A second batch in the same generation is the
+# normal case now; only a repeated triple is rejected.
+row=('id','session',1,1,1,1,'candidate','READY','[]',0,0)
+db.execute('INSERT INTO batches VALUES (?,?,?,?,?,?,?,?,?,?,?)',row)
+db.execute('INSERT INTO batches VALUES (?,?,?,?,?,?,?,?,?,?,?)',('second',)+row[1:10]+(1,))
+assert db.execute('SELECT count(*) FROM batches').fetchone()==(2,)
 try:
- db.execute('INSERT INTO batches VALUES (?,?,?,?,?,?,?,?,?,?)',('different',)+row[1:])
- raise AssertionError('duplicate generation accepted')
+ db.execute('INSERT INTO batches VALUES (?,?,?,?,?,?,?,?,?,?,?)',('different',)+row[1:])
+ raise AssertionError('duplicate (sessionId, generation, batchSeq) accepted')
 except sqlite3.IntegrityError: pass
+# Rebuilt in 7->8, so the pre-existing row must have survived with seq 0.
+assert db.execute("SELECT batchSeq FROM batches WHERE id='id'").fetchone()==(0,)
 # v2.3 §18/§27: legacy videos become UNMATCHED staging refs + PENDING discovery items, never VALIDATED tracks; played is not listening evidence.
 assert db.execute("SELECT matchStatus, trackId FROM playable_ref WHERE resourceId='abcdefghijk'").fetchone()==('UNMATCHED',None)
 assert db.execute("SELECT queueStatus FROM discovery_item WHERE rawRef='abcdefghijk'").fetchone()==('PENDING',)
@@ -48,4 +54,4 @@ cols=[r[1] for r in db.execute('PRAGMA table_info(candidates)')]
 for c in ['energyHint','energyBasis','artistIds','popularity']: assert c in cols, c
 db.execute("INSERT INTO artist_genre_cache VALUES ('a1','[\"k-pop\"]',0)")
 assert db.execute("SELECT genresJson FROM artist_genre_cache WHERE artistId='a1'").fetchone()==('["k-pop"]',)
-print('PASS: additive migrations v1→v7 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns')
+print('PASS: additive migrations v1→v8 preserve rows, stage legacy videos as UNMATCHED, keep played as exposure only, add observation tables and genre and popularity columns, and key batches by (sessionId, generation, batchSeq)')

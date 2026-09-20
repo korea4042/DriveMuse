@@ -29,10 +29,14 @@ class PlaybackObserver(
     private val session: () -> String,
     private val now: () -> Long = System::currentTimeMillis,
     /** Fired outside the lock once a planned track is confirmed playing, for the scheduler (§6). */
-    private val onStarted: suspend (trackId: String, ordinal: Int, plannedSize: Int) -> Unit = { _, _, _ -> }
+    private val onStarted: suspend (trackId: String, ordinal: Int, plannedSize: Int) -> Unit = { _, _, _ -> },
+    /**
+     * R09. Fired once per unplanned recording. Before this the id was stored and never read, so a
+     * recording the app did not queue produced no response at all. Carries no listening evidence:
+     * an unplanned track says something about control, nothing about taste.
+     */
+    private val onUnplanned: suspend (trackId: String) -> Unit = { }
 ) {
-    /** A confirmed start, returned from the state handler so the callback runs without the lock. */
-    private data class Started(val trackId: String, val ordinal: Int, val plannedSize: Int)
     /** Ordinal of each track the app handed to the player, so an auto-advance is still ours. */
     private val planned = LinkedHashMap<String, Int>()
     private val mutex = Mutex()
@@ -46,9 +50,23 @@ class PlaybackObserver(
     /** Set when the player reports a recording the app did not queue (§30 suspend condition). */
     var unplannedTrackId: String? = null; private set
 
+    /** What the state handler wants said once the lock is released. */
+    private sealed interface Signal {
+        data class Started(val trackId: String, val ordinal: Int, val plannedSize: Int) : Signal
+        data class Unplanned(val trackId: String) : Signal
+    }
+
     fun start(scope: CoroutineScope, states: Flow<RemotePlayerState?>) {
         job?.cancel()
-        job = scope.launch { states.collect { state -> onState(state)?.let { runCatching { onStarted(it.trackId, it.ordinal, it.plannedSize) } } } }
+        job = scope.launch {
+            states.collect { state ->
+                when (val signal = onState(state)) {
+                    is Signal.Started -> runCatching { onStarted(signal.trackId, signal.ordinal, signal.plannedSize) }
+                    is Signal.Unplanned -> runCatching { onUnplanned(signal.trackId) }
+                    null -> Unit
+                }
+            }
+        }
     }
     fun stop() { job?.cancel(); job = null }
 
@@ -71,13 +89,19 @@ class PlaybackObserver(
     /** Closes whatever is open, e.g. when the user takes manual control or the app resets. */
     suspend fun release(trigger: EndTrigger = EndTrigger.SESSION_END): Unit = mutex.withLock { close(trigger) }
 
-    private suspend fun onState(state: RemotePlayerState?): Started? = mutex.withLock {
+    private suspend fun onState(state: RemotePlayerState?): Signal? = mutex.withLock {
         if (state == null) { close(EndTrigger.DISCONNECTED); return@withLock null }
         val id = state.trackId ?: return@withLock null
         if (id != attempt?.trackId) {
             close(EndTrigger.TRACK_CHANGED)
             val ordinal = planned[id]
-            if (ordinal == null) { unplannedTrackId = id; return@withLock null }
+            // R09: report it once. Repeating the signal for every callback of the same recording
+            // would turn one intervention into a stream of them.
+            if (ordinal == null) {
+                val first = unplannedTrackId != id
+                unplannedTrackId = id
+                return@withLock if (first) Signal.Unplanned(id) else null
+            }
             unplannedTrackId = null
             attempt = PlaybackAttemptEntity(UUID.randomUUID().toString(), id, session(), batch, ordinal, null, state.observedAt, null, null, "COMMANDED")
             durationMs = null; lastPositionMs = 0; lastStoredAt = 0; commandAt = null; observations.clear()
@@ -86,11 +110,11 @@ class PlaybackObserver(
         durationMs = state.durationMs.takeIf { it > 0 } ?: durationMs
         lastPositionMs = state.positionMs
         // §7: the command being accepted is not a start. PLAYING with the expected id is.
-        var started: Started? = null
+        var started: Signal.Started? = null
         if (open.confirmedAt == null && !state.paused) {
             attempt = open.copy(confirmedAt = state.observedAt, state = "START_CONFIRMED")
             db.intelligence().putAttempt(attempt!!)
-            started = Started(id, open.ordinal, planned.size)
+            started = Signal.Started(id, open.ordinal, planned.size)
         }
         val observation = Observation(
             UUID.randomUUID().toString(), open.attemptId, state.observedAt, state.positionMs,

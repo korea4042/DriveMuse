@@ -154,7 +154,7 @@ class Preferences(private val context: Context) {
     TrackEntity::class, TrackIdentifierEntity::class, PlayableRefEntity::class, MetadataAssertionEntity::class, DiscoveryItemEntity::class, EnrichmentJobEntity::class, ValidationDecisionEntity::class,
     IdentityAliasEntity::class, TrackExperienceEntity::class, UserTrackContextEntity::class, DiscoverySeedEntity::class, CollectionRunEntity::class, CollectionControlEntity::class, QuotaLedgerEntity::class, IntegrationConfigEntity::class,
     PlaybackAttemptEntity::class, PlaybackEventEntity::class],
-    version = 7, exportSchema = true)
+    version = 8, exportSchema = true)
 abstract class DriveDatabase: RoomDatabase() {
     abstract fun dao(): DriveDao
     abstract fun intelligence(): IntelligenceDao
@@ -262,9 +262,24 @@ abstract class DriveDatabase: RoomDatabase() {
                 db.execSQL("ALTER TABLE `candidates` ADD COLUMN `popularity` INTEGER")
             }
         }
+        /**
+         * R02. batches gains batchSeq and the unique key becomes the triple. The table is rebuilt
+         * rather than ALTERed: a column added with a SQL DEFAULT that the entity does not declare
+         * makes Room's schema validation fail on the next open. Existing rows keep seq 0, which is
+         * correct because the old key allowed at most one row per (sessionId, generation).
+         */
+        private val MIGRATION_7_8 = object : Migration(7,8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `batches_new` (`id` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `generation` INTEGER NOT NULL, `profileVersion` INTEGER NOT NULL, `contextVersion` INTEGER NOT NULL, `evidenceVersion` INTEGER NOT NULL, `candidateSetId` TEXT NOT NULL, `status` TEXT NOT NULL, `json` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `batchSeq` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+                db.execSQL("INSERT INTO `batches_new` (`id`, `sessionId`, `generation`, `profileVersion`, `contextVersion`, `evidenceVersion`, `candidateSetId`, `status`, `json`, `createdAt`, `batchSeq`) SELECT `id`, `sessionId`, `generation`, `profileVersion`, `contextVersion`, `evidenceVersion`, `candidateSetId`, `status`, `json`, `createdAt`, 0 FROM `batches`")
+                db.execSQL("DROP TABLE `batches`")
+                db.execSQL("ALTER TABLE `batches_new` RENAME TO `batches`")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_batches_sessionId_generation_batchSeq` ON `batches` (`sessionId`, `generation`, `batchSeq`)")
+            }
+        }
         @Volatile private var instance: DriveDatabase? = null
         fun get(context: Context) = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build().also { instance = it }
+            instance ?: Room.databaseBuilder(context.applicationContext,DriveDatabase::class.java,"drive.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build().also { instance = it }
         }
     }
 }

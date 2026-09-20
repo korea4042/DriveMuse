@@ -43,7 +43,9 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     // Phase 1 §4/§6: the App Remote stream finally has a consumer, so listening becomes evidence
     // and the last track of a batch triggers the next one.
     private val scheduler=NextBatchScheduler { base -> prepareNextBatch(base) }
-    private val observer=PlaybackObserver(db,learning,{ sessionId },System::currentTimeMillis) { id,ordinal,size -> scheduler.onStarted(id,ordinal,size) }
+    private val observer=PlaybackObserver(db,learning,{ sessionId },System::currentTimeMillis,
+        { id,ordinal,size -> scheduler.onStarted(id,ordinal,size) },
+        { id -> onUnplannedPlayback(id) })
     private val location=LocationAdapter(application)
     private val weather=WeatherRepository()
     private var region: Region?=null
@@ -210,7 +212,12 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
         if(ui.value.demo) { message("데모 곡은 재생할 수 없습니다"); return }
         viewModelScope.launch {
             observer.commandedSkip()
-            if(!runtime.spotifyRemote.next()) message("Spotify에 연결되지 않았어요")
+            when(val sent=runtime.spotifyRemote.next()) {
+                is ai.drivemuse.app.spotify.DispatchResult.Accepted -> Unit
+                is ai.drivemuse.app.spotify.DispatchResult.Rejected -> message(sent.reason)
+                // Not resent: the skip may have landed, and a second one would drop two tracks.
+                is ai.drivemuse.app.spotify.DispatchResult.Unknown -> message("다음 곡 명령의 결과를 확인하지 못했어요")
+            }
             kotlinx.coroutines.delay(2000);refreshListening()
         }
     }
@@ -360,8 +367,18 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private suspend fun appendToPlayer(carried: List<Track>, queue: List<Track>) {
         observer.plan(null, carried + queue)
         var queued = 0
-        for (track in queue) if (runtime.spotifyRemote.queueAwait(track.id) == null) queued++
-        message(if (queued == queue.size) "다음 ${queued}곡을 이어서 준비했어요" else "다음 ${queued}/${queue.size}곡만 준비했어요 · Spotify 연결을 확인해 주세요")
+        var unclear = 0
+        for (track in queue) when (runtime.spotifyRemote.queue(track.id)) {
+            is ai.drivemuse.app.spotify.DispatchResult.Accepted -> queued++
+            is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
+            is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
+        }
+        message(when {
+            queued == queue.size -> "다음 ${queued}곡을 이어서 준비했어요"
+            // R02/§7: an unconfirmed item is not a waiting track. Say so rather than count it.
+            unclear > 0 -> "다음 ${queued}/${queue.size}곡 확인 · ${unclear}곡은 결과 불명"
+            else -> "다음 ${queued}/${queue.size}곡만 준비했어요 · Spotify 연결을 확인해 주세요"
+        })
     }
 
     /** §6.8 — every failure has one recovery path and only re-auth is worth surfacing. */
@@ -388,6 +405,24 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
     private fun markQueueStale() { if(ui.value.queue.isNotEmpty()) mutable.update { it.copy(queueStale=true) } }
     fun suspendAgent() { cancelSelection(); viewModelScope.launch { coordinator.invalidate();observer.release();prefs.suspendUntil(System.currentTimeMillis()+30*60*1000); message("30분 동안 사용자 선택을 유지합니다") } }
 
+    /**
+     * R09, §7. Something the app did not queue is playing. The app stands down rather than trying
+     * to win the player back: re-sending play or skip here is the loop that fights the driver.
+     *
+     * Deliberately writes no outcome. A recording nobody planned is evidence about control, not
+     * about taste, and the policy boundary keeps Spotify observations out of learning anyway.
+     */
+    private suspend fun onUnplannedPlayback(trackId: String) {
+        if (ui.value.demo) return
+        if (settings.value.suspendedUntil > System.currentTimeMillis()) return
+        cancelSelection()
+        scheduler.reset()
+        coordinator.invalidate()
+        prefs.suspendUntil(System.currentTimeMillis()+30*60*1000)
+        mutable.update { it.copy(queueStale=true) }
+        message("목록에 없는 곡이 재생돼 자동 선곡을 30분 동안 멈췄어요. 계속하려면 곡을 다시 선택해 주세요")
+    }
+
     /** One in-flight playback request at a time: a double tap must not queue the batch twice (QUE02). */
     private var playbackJob: Job? = null
 
@@ -411,27 +446,45 @@ class DriveViewModel(application: Application): AndroidViewModel(application) {
             observer.plan(null, listOf(track) + following); scheduler.reset()
             val remote = runtime.spotifyRemote
             var transport = "App Remote"
-            var failure = remote.connect(getApplication())
-            if (failure == null) failure = remote.playAndConfirm(track.id)
-            if (failure != null) {
-                // A device that is already awake can still take a Web API command; same plan, other pipe.
-                transport = "Web API"
-                val web = runCatching { runtime.spotify.play(track.id) }
-                val confirmed = web.isSuccess && confirmViaWebApi(track.id)
-                if (!confirmed) {
-                    message(failure + (web.exceptionOrNull()?.let { " · Web API: ${it.message}" } ?: " · Web API: 시작 확인 실패"))
-                    return@withTimeoutOrNull false
+            val connectFailure = remote.connect(getApplication())
+            val start = if (connectFailure != null) ai.drivemuse.app.spotify.StartResult.Failed(connectFailure)
+                        else remote.playAndConfirm(track.id)
+            when (start) {
+                is ai.drivemuse.app.spotify.StartResult.Confirmed -> Unit
+                // R01: only a definitive refusal justifies sending the same play down another pipe.
+                is ai.drivemuse.app.spotify.StartResult.Failed -> {
+                    transport = "Web API"
+                    val web = runCatching { runtime.spotify.play(track.id) }
+                    if (!(web.isSuccess && confirmViaWebApi(track.id))) {
+                        message(start.reason + (web.exceptionOrNull()?.let { " · Web API: ${it.message}" } ?: " · Web API: 시작 확인 실패"))
+                        return@withTimeoutOrNull false
+                    }
+                }
+                // The command may already be playing. Re-sending it would restart the track, so
+                // look at the player once more and report an unclear state rather than act on it.
+                is ai.drivemuse.app.spotify.StartResult.Indeterminate -> {
+                    if (!confirmViaWebApi(track.id)) {
+                        message(start.reason + " · 명령 결과가 불명확해 같은 곡을 다시 보내지 않았어요. Spotify 앱 상태를 확인해 주세요")
+                        return@withTimeoutOrNull false
+                    }
                 }
             }
             // Exposure only (§17 EXPOSED_ONLY); the listening outcome comes from observation.
             if (!ui.value.demo) repository.recordPlay(track.id)
             var queued = 0
+            var unclear = 0
             for (next in following) {
-                val err = if (transport == "App Remote") remote.queueAwait(next.id) else runCatching { runtime.spotify.queue(next.id) }.exceptionOrNull()?.message
-                if (err == null) queued++
+                if (transport == "App Remote") when (remote.queue(next.id)) {
+                    is ai.drivemuse.app.spotify.DispatchResult.Accepted -> queued++
+                    // Re-queueing on Unknown is how the same track lands twice (§7).
+                    is ai.drivemuse.app.spotify.DispatchResult.Unknown -> unclear++
+                    is ai.drivemuse.app.spotify.DispatchResult.Rejected -> Unit
+                } else if (runCatching { runtime.spotify.queue(next.id) }.isSuccess) queued++
             }
             refreshListening()
-            message("${track.artist} ${track.title} 재생 시작" + (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기") + " ($transport)")
+            message("${track.artist} ${track.title} 재생 시작" +
+                (if (following.isEmpty()) "" else " · 이어서 ${queued}/${following.size}곡 대기" + (if (unclear > 0) " · ${unclear}곡 결과 불명" else "")) +
+                " ($transport)")
             true
           }
           if (finished == null) message("재생 요청이 60초 안에 끝나지 않아 중단했어요. Spotify 앱 상태를 확인해 주세요")
