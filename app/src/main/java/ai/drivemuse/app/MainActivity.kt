@@ -58,14 +58,20 @@ class MainActivity: ComponentActivity() {
         setContent { DriveMuseTheme { DriveApp(redirect = redirect) } }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); redirect.value = intent.data }
-    // §10 step 1. Observed and passed straight on: consuming here would break the ordinary button
-    // behaviour the diagnostic exists to protect, and would make the app look like the base-action
-    // owner when it is only listening from the foreground.
-    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
-        SteeringKeyTap.observe(event); return super.onKeyDown(keyCode, event)
-    }
-    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent): Boolean {
-        SteeringKeyTap.observe(event); return super.onKeyUp(keyCode, event)
+    /**
+     * §10 step 1. Observed and passed straight on: consuming here would break the ordinary button
+     * behaviour the diagnostic exists to protect, and would make the app look like the base-action
+     * owner when it is only listening from the foreground.
+     *
+     * dispatchKeyEvent rather than onKeyDown/onKeyUp. Those two are only called for keys nothing
+     * in the view hierarchy handled, so a key that a focused view swallows would never appear —
+     * and "the app did not receive it" is exactly the conclusion this screen must not reach by
+     * accident. This sees everything delivered to the window and still returns the framework's
+     * own answer unchanged.
+     */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        SteeringKeyTap.observe(event)
+        return super.dispatchKeyEvent(event)
     }
 }
 @Composable fun DriveApp(vm: DriveViewModel = viewModel(), cvm: CatalogViewModel = viewModel(), redirect: MutableStateFlow<android.net.Uri?>? = null) {
